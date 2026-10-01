@@ -20,8 +20,8 @@ edition 5;
 // `tests/e2e.py` holds the service to that document: every response must conform
 // to it, and Schemathesis generates requests from it.
 //
-// Storage is in memory and bounded: 10,000 users in a 4 MiB arena, a full store
-// is a 503 rather than growth. A delete leaves a hole (ids are not reused).
+// Storage is in memory and grows with the users, up to 100,000 or 64 MiB (past
+// that a POST is a 503). A delete leaves a hole: ids are not reused.
 //
 // Authority (`lex-sys authority`): `net_in`, `conn_*`, `poll`, `clock`, `heap`,
 // `args`, the console -- and no `ffi`.
@@ -32,15 +32,18 @@ import std.http;
 import std.io;
 import std.json;
 import std.route;
+import std.vec;
 import http.server;
 import schema;
 
+// The most the store will hold: 100,000 users in 64 MiB. It grows toward these;
+// past them a POST is a 503, not a crash.
 fn max_users() -> [] int {
-    return 10000;
+    return 100000;
 }
 
 fn arena_bytes() -> [] int {
-    return 4194304;
+    return 67108864;
 }
 
 fn default_limit() -> [] int {
@@ -73,69 +76,69 @@ fn number_of[&t](text: &t [byte]) -> [] int {
 // The store
 // ---------------------------------------------------------------------
 
-// Each user is kept as the JSON it is answered with, in one arena; `index[2k]`
-// and `index[2k+1]` are where user `k + 1` starts and how long it is (-1: deleted).
+// Each user is kept as the JSON it is answered with, back to back in `rows`;
+// `index[2k]` and `index[2k+1]` are where user `k + 1` starts and how long it is
+// (-1: deleted). Both grow as users arrive, up to the limits below -- growing
+// replaces the allocation under a `res` field, so adding a user takes and
+// returns the `Store` by value, as `std.buffer` and `std.vec` do. Looking one up,
+// and deleting one, work through a reference.
 res struct Store {
-    rows: Box[[byte]],
-    index: Box[[int]],
-    used: int,
+    rows: buffer.Buffer,
+    index: vec.Vec[int],
     count: int,
     live: int,
 }
 
 fn store_new[&h](heap: &!h Heap) -> [heap] Store {
-    return Store { rows: box_slice(heap, arena_bytes(), byte_of(0)), index: box_slice(heap, 2 * max_users(), 0), used: 0, count: 0, live: 0 };
+    return Store { rows: buffer.empty(heap, 1024), index: vec.empty(heap, 32, 0), count: 0, live: 0 };
 }
 
 fn store_drop[&h](heap: &!h Heap, s: Store) -> [heap] int {
-    let Store { rows, index, used, count, live } = s;
-    unbox_slice(heap, rows);
-    unbox_slice(heap, index);
+    let Store { rows, index, count, live } = s;
+    buffer.drop(heap, rows);
+    vec.drop(heap, index);
     return live;
 }
 
-// Add `json`, answering the new id, or -1 if the store is full.
-fn store_add[&s, &b](st: &!s Store, json: &b [byte]) -> [] int {
-    if st.count >= max_users() || st.used + len(json) > arena_bytes() {
-        return 0 - 1;
+// Add `json` as the next user, answering the store and the new id -- or the
+// store unchanged and -1 if a limit is reached.
+fn store_add[&h, &b](heap: &!h Heap, s: Store, json: &b [byte]) -> [heap] (Store, int) {
+    let Store { rows, index, count, live } = s;
+    var used = 0;
+    borrow rows as &rr in {
+        used = buffer.size(rr);
     }
-    let rows = contents(st.rows);
-    let index = contents(st.index);
-    var i = 0;
-    while i < len(json) {
-        rows[st.used + i] = json[i];
-        i = i + 1;
+    if count >= max_users() || used + len(json) > arena_bytes() {
+        return (Store { rows: rows, index: index, count: count, live: live }, 0 - 1);
     }
-    index[2 * st.count] = st.used;
-    index[2 * st.count + 1] = len(json);
-    st.used = st.used + len(json);
-    st.count = st.count + 1;
-    st.live = st.live + 1;
-    return st.count;
+    var idx = vec.push(heap, index, used);
+    idx = vec.push(heap, idx, len(json));
+    let grown = buffer.append(heap, rows, json);
+    return (Store { rows: grown, index: idx, count: count + 1, live: live + 1 }, count + 1);
 }
 
 fn store_has[&s](st: &s Store, id: int) -> [] bool {
     if id < 1 || id > st.count {
         return false;
     }
-    return contents(st.index)[2 * (id - 1) + 1] >= 0;
+    return vec.get(st.index, 2 * (id - 1) + 1) >= 0;
 }
 
 // The JSON of user `id`; empty if there is none.
 fn store_get[&s](st: &s Store, id: int) -> [] &s [byte] {
-    let rows = contents(st.rows);
+    let rows = buffer.bytes(st.rows);
     if !store_has(st, id) {
         return rows[0..0];
     }
-    let at = contents(st.index)[2 * (id - 1)];
-    return rows[at..at + contents(st.index)[2 * (id - 1) + 1]];
+    let at = vec.get(st.index, 2 * (id - 1));
+    return rows[at..at + vec.get(st.index, 2 * (id - 1) + 1)];
 }
 
 fn store_delete[&s](st: &!s Store, id: int) -> [] bool {
     if !store_has(st, id) {
         return false;
     }
-    contents(st.index)[2 * (id - 1) + 1] = 0 - 1;
+    vec.set(st.index, 2 * (id - 1) + 1, 0 - 1);
     st.live = st.live - 1;
     return true;
 }
@@ -180,41 +183,58 @@ fn user_fields[&h](heap: &!h Heap, s: schema.Schema, obj: int, id: int, name: in
     return t;
 }
 
-// The OpenAPI document: the paths written out, the schemas generated.
+// The paths, written out. A complete JSON value, spliced in whole by
+// `json.put_fragment`, which checks it: a typo here stops the service at start-up
+// rather than serving an invalid document.
+fn paths_json() -> [] &static [byte] {
+    return "{\"/health\":{\"get\":{\"operationId\":\"health\",\"responses\":{\"200\":{\"description\":\"alive\",\"content\":{\"application/json\":{\"schema\":{\"type\":\"object\",\"properties\":{\"ok\":{\"type\":\"boolean\"}},\"required\":[\"ok\"],\"additionalProperties\":false}}}}}}},\"/users\":{\"get\":{\"operationId\":\"listUsers\",\"parameters\":[{\"name\":\"limit\",\"in\":\"query\",\"required\":false,\"schema\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100}},{\"name\":\"offset\",\"in\":\"query\",\"required\":false,\"schema\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":99999999999999999}}],\"responses\":{\"200\":{\"description\":\"a page\",\"content\":{\"application/json\":{\"schema\":{\"$ref\":\"#/components/schemas/Page\"}}}},\"422\":{\"$ref\":\"#/components/responses/Problem\"}}},\"post\":{\"operationId\":\"createUser\",\"requestBody\":{\"required\":true,\"content\":{\"application/json\":{\"schema\":{\"$ref\":\"#/components/schemas/NewUser\"}}}},\"responses\":{\"201\":{\"description\":\"created\",\"headers\":{\"Location\":{\"schema\":{\"type\":\"string\"}}},\"content\":{\"application/json\":{\"schema\":{\"$ref\":\"#/components/schemas/User\"}}}},\"400\":{\"$ref\":\"#/components/responses/Problem\"},\"415\":{\"$ref\":\"#/components/responses/Problem\"},\"422\":{\"$ref\":\"#/components/responses/Problem\"},\"503\":{\"$ref\":\"#/components/responses/Problem\"}}}},\"/users/{id}\":{\"parameters\":[{\"name\":\"id\",\"in\":\"path\",\"required\":true,\"schema\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":99999999999999999}}],\"get\":{\"operationId\":\"getUser\",\"responses\":{\"200\":{\"description\":\"the user\",\"content\":{\"application/json\":{\"schema\":{\"$ref\":\"#/components/schemas/User\"}}}},\"404\":{\"$ref\":\"#/components/responses/Problem\"},\"422\":{\"$ref\":\"#/components/responses/Problem\"}}},\"delete\":{\"operationId\":\"deleteUser\",\"responses\":{\"204\":{\"description\":\"deleted\"},\"404\":{\"$ref\":\"#/components/responses/Problem\"},\"422\":{\"$ref\":\"#/components/responses/Problem\"}}}}}";
+}
+
+fn problem_response_json() -> [] &static [byte] {
+    return "{\"Problem\":{\"description\":\"a problem\",\"content\":{\"application/problem+json\":{\"schema\":{\"$ref\":\"#/components/schemas/Problem\"}}}}}";
+}
+
+// One named schema into `components.schemas`: the generated JSON Schema of `node`.
+fn put_schema[&h, &s, &n](heap: &!h Heap, w: json.Writer, sc: &s schema.Schema, name: &n [byte], node: int) -> [heap] json.Writer {
+    var o = json.put_key(heap, w, name);
+    let fragment = schema.json_schema(heap, sc, node);
+    borrow fragment as &fb in {
+        o = json.put_fragment(heap, o, buffer.bytes(fb));
+    }
+    buffer.drop(heap, fragment);
+    return o;
+}
+
+// The OpenAPI document: the paths written out, the schemas generated -- from the
+// same nodes `schema.validate` runs.
 fn openapi[&h, &s](heap: &!h Heap, sc: &s schema.Schema, new_user: int, user: int, page: int, problem: int) -> [heap] buffer.Buffer {
-    var d = buffer.empty(heap, 8192);
-    d = buffer.append(heap, d, "{\"openapi\":\"3.1.0\",\"info\":{\"title\":\"Users API\",\"version\":\"1.0.0\"},\"paths\":{");
-    d = buffer.append(heap, d, "\"/health\":{\"get\":{\"operationId\":\"health\",\"responses\":{\"200\":{\"description\":\"alive\",\"content\":{\"application/json\":{\"schema\":{\"type\":\"object\",\"properties\":{\"ok\":{\"type\":\"boolean\"}},\"required\":[\"ok\"],\"additionalProperties\":false}}}}}}},");
-    d = buffer.append(heap, d, "\"/users\":{\"get\":{\"operationId\":\"listUsers\",\"parameters\":[{\"name\":\"limit\",\"in\":\"query\",\"required\":false,\"schema\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100}},{\"name\":\"offset\",\"in\":\"query\",\"required\":false,\"schema\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":99999999999999999}}],\"responses\":{\"200\":{\"description\":\"a page\",\"content\":{\"application/json\":{\"schema\":{\"$ref\":\"#/components/schemas/Page\"}}}},\"422\":{\"$ref\":\"#/components/responses/Problem\"}}},");
-    d = buffer.append(heap, d, "\"post\":{\"operationId\":\"createUser\",\"requestBody\":{\"required\":true,\"content\":{\"application/json\":{\"schema\":{\"$ref\":\"#/components/schemas/NewUser\"}}}},\"responses\":{\"201\":{\"description\":\"created\",\"headers\":{\"Location\":{\"schema\":{\"type\":\"string\"}}},\"content\":{\"application/json\":{\"schema\":{\"$ref\":\"#/components/schemas/User\"}}}},\"400\":{\"$ref\":\"#/components/responses/Problem\"},\"415\":{\"$ref\":\"#/components/responses/Problem\"},\"422\":{\"$ref\":\"#/components/responses/Problem\"},\"503\":{\"$ref\":\"#/components/responses/Problem\"}}}},");
-    d = buffer.append(heap, d, "\"/users/{id}\":{\"parameters\":[{\"name\":\"id\",\"in\":\"path\",\"required\":true,\"schema\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":99999999999999999}}],\"get\":{\"operationId\":\"getUser\",\"responses\":{\"200\":{\"description\":\"the user\",\"content\":{\"application/json\":{\"schema\":{\"$ref\":\"#/components/schemas/User\"}}}},\"404\":{\"$ref\":\"#/components/responses/Problem\"},\"422\":{\"$ref\":\"#/components/responses/Problem\"}}},");
-    d = buffer.append(heap, d, "\"delete\":{\"operationId\":\"deleteUser\",\"responses\":{\"200\":{\"description\":\"the deleted user\",\"content\":{\"application/json\":{\"schema\":{\"$ref\":\"#/components/schemas/User\"}}}},\"404\":{\"$ref\":\"#/components/responses/Problem\"},\"422\":{\"$ref\":\"#/components/responses/Problem\"}}}}},");
-    d = buffer.append(heap, d, "\"components\":{\"responses\":{\"Problem\":{\"description\":\"a problem\",\"content\":{\"application/problem+json\":{\"schema\":{\"$ref\":\"#/components/schemas/Problem\"}}}}},\"schemas\":{");
-    let a = schema.json_schema(heap, sc, new_user);
-    borrow a as &ab in {
-        d = buffer.append(heap, d, "\"NewUser\":");
-        d = buffer.append(heap, d, buffer.bytes(ab));
-    }
-    buffer.drop(heap, a);
-    let b = schema.json_schema(heap, sc, user);
-    borrow b as &bb in {
-        d = buffer.append(heap, d, ",\"User\":");
-        d = buffer.append(heap, d, buffer.bytes(bb));
-    }
-    buffer.drop(heap, b);
-    let c = schema.json_schema(heap, sc, page);
-    borrow c as &cb in {
-        d = buffer.append(heap, d, ",\"Page\":");
-        d = buffer.append(heap, d, buffer.bytes(cb));
-    }
-    buffer.drop(heap, c);
-    let e = schema.json_schema(heap, sc, problem);
-    borrow e as &eb in {
-        d = buffer.append(heap, d, ",\"Problem\":");
-        d = buffer.append(heap, d, buffer.bytes(eb));
-    }
-    buffer.drop(heap, e);
-    return buffer.append(heap, d, "}}}");
+    var w = json.writer(heap, 8192);
+    w = json.begin_object(heap, w);
+    w = json.put_key(heap, w, "openapi");
+    w = json.put_string(heap, w, "3.1.0");
+    w = json.put_key(heap, w, "info");
+    w = json.begin_object(heap, w);
+    w = json.put_key(heap, w, "title");
+    w = json.put_string(heap, w, "Users API");
+    w = json.put_key(heap, w, "version");
+    w = json.put_string(heap, w, "1.0.0");
+    w = json.end_object(heap, w);
+    w = json.put_key(heap, w, "paths");
+    w = json.put_fragment(heap, w, paths_json());
+    w = json.put_key(heap, w, "components");
+    w = json.begin_object(heap, w);
+    w = json.put_key(heap, w, "responses");
+    w = json.put_fragment(heap, w, problem_response_json());
+    w = json.put_key(heap, w, "schemas");
+    w = json.begin_object(heap, w);
+    w = put_schema(heap, w, sc, "NewUser", new_user);
+    w = put_schema(heap, w, sc, "User", user);
+    w = put_schema(heap, w, sc, "Page", page);
+    w = put_schema(heap, w, sc, "Problem", problem);
+    w = json.end_object(heap, w);
+    w = json.end_object(heap, w);
+    w = json.end_object(heap, w);
+    return json.finish(w);
 }
 
 // Build every schema, answering the `Schema`, the node a POST body is checked
@@ -271,12 +291,6 @@ fn setup[&h](heap: &!h Heap) -> [heap] (schema.Schema, int, buffer.Buffer) {
 // Answers
 // ---------------------------------------------------------------------
 
-// A whole response of any content type.
-fn reply_as[&h, &c, &b, &x](heap: &!h Heap, out: buffer.Buffer, status: int, content_type: &c [byte], body: &b [byte], keep: bool, extra: &x [byte]) -> [heap] buffer.Buffer {
-    let head = http.respond_head_with(heap, out, status, content_type, len(body), keep, extra);
-    return buffer.append(heap, head, body);
-}
-
 // `application/problem+json` (RFC 9457) with a `detail` and no error list.
 fn problem[&h, &t, &d](heap: &!h Heap, out: buffer.Buffer, status: int, title: &t [byte], detail: &d [byte], keep: bool) -> [heap] buffer.Buffer {
     var w = json.writer(heap, 128);
@@ -293,7 +307,7 @@ fn problem[&h, &t, &d](heap: &!h Heap, out: buffer.Buffer, status: int, title: &
     let body = json.finish(w);
     var answer = out;
     borrow body as &bb in {
-        answer = reply_as(heap, answer, status, "application/problem+json", buffer.bytes(bb), keep, "");
+        answer = server.reply_as(heap, answer, status, "application/problem+json", buffer.bytes(bb), keep, "");
     }
     buffer.drop(heap, body);
     return answer;
@@ -373,12 +387,15 @@ fn is_json_type[&c](value: &c [byte]) -> [] bool {
     return len(value) == len(want) || int_of(value[len(want)]) == 59 || int_of(value[len(want)]) == 32;
 }
 
-fn create[&h, &sc, &st, &q, &t, &b](heap: &!h Heap, sc: &sc schema.Schema, new_user: int, store: &!st Store, request: &q [byte], table: &t [int], body: &b [byte], out: buffer.Buffer, keep: bool) -> [heap] buffer.Buffer {
+// Validate, store, answer. The store comes in and goes out by value, because
+// adding a user can grow it.
+fn create[&h, &sc, &q, &t, &b](heap: &!h Heap, sc: &sc schema.Schema, new_user: int, store: Store, request: &q [byte], table: &t [int], body: &b [byte], out: buffer.Buffer, keep: bool) -> [heap] (buffer.Buffer, Store) {
     if !is_json_type(http.header(request, table, "content-type")) {
-        return problem(heap, out, 415, "Unsupported Media Type", "send Content-Type: application/json", keep);
+        return (problem(heap, out, 415, "Unsupported Media Type", "send Content-Type: application/json", keep), store);
     }
     let tape = box_slice(heap, json.tape_len(body), 0);
     var answer = out;
+    var st = store;
     borrow mut tape as &!tw in {
         let tp = contents(tw);
         let nodes = json.parse(body, tp);
@@ -400,13 +417,18 @@ fn create[&h, &sc, &st, &q, &t, &b](heap: &!h Heap, sc: &sc schema.Schema, new_u
                     if schema.validate(sc, new_user, body, tp, sl, es) > 0 {
                         let p = schema.problem(heap, sc, body, tp, es, 422, "Unprocessable Content");
                         borrow p as &pb in {
-                            answer = reply_as(heap, answer, 422, "application/problem+json", buffer.bytes(pb), keep, "");
+                            answer = server.reply_as(heap, answer, 422, "application/problem+json", buffer.bytes(pb), keep, "");
                         }
                         buffer.drop(heap, p);
                     } else {
-                        let user = render_user(heap, store.count + 1, body, tp, sl);
+                        var next_id = 0;
+                        borrow st as &str in {
+                            next_id = str.count + 1;
+                        }
+                        let user = render_user(heap, next_id, body, tp, sl);
                         borrow user as &ub in {
-                            let id = store_add(store, buffer.bytes(ub));
+                            let (grown, id) = store_add(heap, st, buffer.bytes(ub));
+                            st = grown;
                             if id < 0 {
                                 answer = problem(heap, answer, 503, "Service Unavailable", "the store is full", keep);
                             } else {
@@ -414,7 +436,7 @@ fn create[&h, &sc, &st, &q, &t, &b](heap: &!h Heap, sc: &sc schema.Schema, new_u
                                 location = buffer.push_nat(heap, location, id);
                                 location = buffer.append(heap, location, "\r\n");
                                 borrow location as &lb in {
-                                    answer = reply_as(heap, answer, 201, "application/json", buffer.bytes(ub), keep, buffer.bytes(lb));
+                                    answer = server.reply_as(heap, answer, 201, "application/json", buffer.bytes(ub), keep, buffer.bytes(lb));
                                 }
                                 buffer.drop(heap, location);
                             }
@@ -428,7 +450,7 @@ fn create[&h, &sc, &st, &q, &t, &b](heap: &!h Heap, sc: &sc schema.Schema, new_u
         }
     }
     unbox_slice(heap, tape);
-    return answer;
+    return (answer, st);
 }
 
 // `?limit=&offset=`: the value of `key`, or `fallback` if absent, or -1 if it is
@@ -475,9 +497,12 @@ fn list[&h, &st, &q](heap: &!h Heap, store: &st Store, query: &q [byte], out: bu
     if offset < 0 {
         return problem(heap, out, 422, "Unprocessable Content", "offset must be a non-negative integer", keep);
     }
-    var body = buffer.append(heap, buffer.empty(heap, 256), "{\"total\":");
-    body = buffer.push_nat(heap, body, store.live);
-    body = buffer.append(heap, body, ",\"items\":[");
+    var w = json.writer(heap, 256);
+    w = json.begin_object(heap, w);
+    w = json.put_key(heap, w, "total");
+    w = json.put_int(heap, w, store.live);
+    w = json.put_key(heap, w, "items");
+    w = json.begin_array(heap, w);
     var skipped = 0;
     var taken = 0;
     var id = 1;
@@ -486,16 +511,16 @@ fn list[&h, &st, &q](heap: &!h Heap, store: &st Store, query: &q [byte], out: bu
             if skipped < offset {
                 skipped = skipped + 1;
             } else {
-                if taken > 0 {
-                    body = buffer.push(heap, body, byte_of(44));
-                }
-                body = buffer.append(heap, body, store_get(store, id));
+                // Each stored user is already a complete JSON value.
+                w = json.put_fragment(heap, w, store_get(store, id));
                 taken = taken + 1;
             }
         }
         id = id + 1;
     }
-    body = buffer.append(heap, body, "]}");
+    w = json.end_array(heap, w);
+    w = json.end_object(heap, w);
+    let body = json.finish(w);
     var answer = out;
     borrow body as &bb in {
         answer = server.reply(heap, answer, 200, buffer.bytes(bb), keep);
@@ -512,16 +537,11 @@ fn one[&h, &st, &p, &s](heap: &!h Heap, store: &!st Store, path: &s [byte], para
     if !store_has(store, id) {
         return problem(heap, out, 404, "Not Found", "no such user", keep);
     }
-    var answer = out;
-    var user = buffer.append(heap, buffer.empty(heap, 128), store_get(store, id));
     if remove {
         store_delete(store, id);
+        return server.reply_empty(heap, out, 204, keep, "");
     }
-    borrow user as &ub in {
-        answer = server.reply(heap, answer, 200, buffer.bytes(ub), keep);
-    }
-    buffer.drop(heap, user);
-    return answer;
+    return server.reply(heap, out, 200, store_get(store, id), keep);
 }
 
 fn routes[&h](heap: &!h Heap) -> [heap] route.Router {
@@ -535,41 +555,46 @@ fn routes[&h](heap: &!h Heap) -> [heap] route.Router {
     return r;
 }
 
-// One parsed request in, one response appended to `out`.
-fn handle[&h, &r, &sc, &st, &d, &q, &t, &p, &b](heap: &!h Heap, router: &r route.Router, sc: &sc schema.Schema, new_user: int, store: &!st Store, doc: &d [byte], request: &q [byte], table: &t [int], params: &!p [int], body: &b [byte], out: buffer.Buffer) -> [heap] buffer.Buffer {
+// One parsed request in, one response appended to `out`. The store goes in and
+// comes out by value: only a `POST` changes its shape, but the signature cannot
+// say which route that is.
+fn handle[&h, &r, &sc, &d, &q, &t, &p, &b](heap: &!h Heap, router: &r route.Router, sc: &sc schema.Schema, new_user: int, store: Store, doc: &d [byte], request: &q [byte], table: &t [int], params: &!p [int], body: &b [byte], out: buffer.Buffer) -> [heap] (buffer.Buffer, Store) {
     let keep = http.keeps_alive(table);
     let path = http.path(request, table);
     let id = route.find(router, http.method(request, table), path, params);
-    if id == 1 {
-        return server.reply(heap, out, 200, "{\"ok\":true}", keep);
-    }
-    if id == 2 {
-        return list(heap, store, http.query(request, table), out, keep);
-    }
     if id == 3 {
         return create(heap, sc, new_user, store, request, table, body, out, keep);
     }
-    if id == 4 {
-        return one(heap, store, path, params, false, out, keep);
-    }
-    if id == 5 {
-        return one(heap, store, path, params, true, out, keep);
-    }
-    if id == 6 {
-        return server.reply(heap, out, 200, doc, keep);
-    }
-    if id == 0 - 2 {
+    var st = store;
+    var answer = out;
+    if id == 1 {
+        answer = server.reply(heap, answer, 200, "{\"ok\":true}", keep);
+    } else if id == 2 {
+        borrow st as &str in {
+            answer = list(heap, str, http.query(request, table), answer, keep);
+        }
+    } else if id == 4 {
+        borrow mut st as &!stw in {
+            answer = one(heap, stw, path, params, false, answer, keep);
+        }
+    } else if id == 5 {
+        borrow mut st as &!stw in {
+            answer = one(heap, stw, path, params, true, answer, keep);
+        }
+    } else if id == 6 {
+        answer = server.reply(heap, answer, 200, doc, keep);
+    } else if id == 0 - 2 {
         var extra = buffer.append(heap, buffer.empty(heap, 48), "Allow: ");
         extra = route.allowed(heap, router, path, params, extra);
         extra = buffer.append(heap, extra, "\r\n");
-        var answer = out;
         borrow extra as &eb in {
             answer = server.failure_with(heap, answer, 405, "method not allowed", keep, buffer.bytes(eb));
         }
         buffer.drop(heap, extra);
-        return answer;
+    } else {
+        answer = problem(heap, answer, 404, "Not Found", "no such route", keep);
     }
-    return problem(heap, out, 404, "Not Found", "no such route", keep);
+    return (answer, st);
 }
 
 // ---------------------------------------------------------------------
@@ -604,11 +629,11 @@ fn run[&h, &r, &k, &l](heap: &!h Heap, router: &r route.Router, clock: &k Clock,
                         }
                         borrow srv as &sr in {
                             borrow mut params as &!pw in {
-                                borrow mut store as &!stw in {
-                                    borrow sc as &scr in {
-                                        borrow doc as &dr in {
-                                            out = handle(heap, router, scr, new_user, stw, buffer.bytes(dr), server.head(sr), server.parsed(sr), contents(pw), server.body(sr), out);
-                                        }
+                                borrow sc as &scr in {
+                                    borrow doc as &dr in {
+                                        let (answer, back) = handle(heap, router, scr, new_user, store, buffer.bytes(dr), server.head(sr), server.parsed(sr), contents(pw), server.body(sr), out);
+                                        out = answer;
+                                        store = back;
                                     }
                                 }
                             }

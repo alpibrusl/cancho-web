@@ -33,7 +33,7 @@ refuses a store that no longer matches.
 ## Tests
 
 ```
-python3 tests/e2e.py              # 23 tests; builds first       (pip install jsonschema openapi-spec-validator schemathesis)
+python3 tests/e2e.py              # 25 tests; builds first       (pip install jsonschema openapi-spec-validator schemathesis)
 EXAMPLES=500 python3 tests/e2e.py # more generated requests
 ```
 

@@ -108,6 +108,12 @@ def conforms(method, path, status, resp, raw):
     if "$ref" in declared:
         declared = DOC["components"]["responses"][declared["$ref"].rsplit("/", 1)[1]]
     content = declared.get("content", {})
+    if not content:
+        # A response the document declares with no body (the `204`): no body, and
+        # no `Content-Length` or `Content-Type` either (RFC 9110 section 15.3.5).
+        assert raw == b"", "%s %s %d declares no body but sent %r" % (method, path, status, raw[:60])
+        assert resp.getheader("Content-Length") is None and resp.getheader("Content-Type") is None
+        return
     ctype = resp.getheader("Content-Type", "").split(";")[0]
     assert ctype in content, "%s %s %d: Content-Type %r not declared (%s)" % (method, path, status, ctype, list(content))
     schema = content[ctype]["schema"]
@@ -152,7 +158,8 @@ class Users(unittest.TestCase):
                          {"name": "Ada", "email": "ada@example.com", "age": 36, "role": "admin", "tags": ["x", "y"]})
         self.assertEqual(request(c, "GET", "/users/%d" % user["id"])[2], user)
         self.assertIn(user, all_users(c))
-        self.assertEqual(request(c, "DELETE", "/users/%d" % user["id"])[2], user)
+        status, _, body = request(c, "DELETE", "/users/%d" % user["id"])
+        self.assertEqual((status, body), (204, None))
         self.assertEqual(request(c, "GET", "/users/%d" % user["id"])[0], 404)
         self.assertEqual(request(c, "DELETE", "/users/%d" % user["id"])[0], 404)
 
@@ -186,6 +193,44 @@ class Users(unittest.TestCase):
         before = request(c, "GET", "/users?limit=1")[2]["total"]
         request(c, "DELETE", "/users/%d" % a)
         self.assertEqual(request(c, "GET", "/users?limit=1")[2]["total"], before - 1)
+
+
+class Frames(unittest.TestCase):
+    def test_a_204_is_framed_by_its_blank_line_not_a_length(self):
+        # No Content-Length on a 204: the next answer on the connection starts at
+        # the blank line. Two DELETEs and a GET, pipelined, answered in order.
+        c = conn()
+        a = request(c, "POST", "/users", {"name": "d1"})[2]["id"]
+        b = request(c, "POST", "/users", {"name": "d2"})[2]["id"]
+        s = socket.create_connection(("127.0.0.1", PORT))
+        s.sendall(("DELETE /users/%d HTTP/1.1\r\nHost: t\r\n\r\nDELETE /users/%d HTTP/1.1\r\nHost: t\r\n\r\n"
+                   "GET /health HTTP/1.1\r\nHost: t\r\n\r\n" % (a, b)).encode())
+        got = b""
+        while got.count(b"\r\n\r\n") < 3 or not got.endswith(b'{"ok":true}'):
+            chunk = s.recv(4096)
+            assert chunk, got
+            got += chunk
+        s.close()
+        self.assertEqual(got.split(b"\r\n\r\n")[0], b"HTTP/1.1 204 No Content\r\nConnection: keep-alive")
+        self.assertEqual(got.count(b"204 No Content"), 2)
+        self.assertNotIn(b"Content-Length: 0", got.split(b"HTTP/1.1 200")[0])
+
+
+class Growth(unittest.TestCase):
+    def test_the_store_grows_past_what_the_old_fixed_arena_held(self):
+        # The first version kept 10,000 users in a fixed 4 MiB arena. Twelve
+        # thousand users of about 400 bytes is 4.8 MB: the store has to grow.
+        c = conn()
+        base = request(c, "GET", "/users?limit=1")[2]["total"]
+        user = {"name": "n" * 64, "email": "e" * 100 + "@x.io", "age": 40, "role": "user", "tags": ["t" * 16] * 8}
+        last = None
+        for i in range(12000):
+            status, _, last = request(c, "POST", "/users", user)
+            self.assertEqual(status, 201, i)
+        self.assertEqual(request(c, "GET", "/users?limit=1")[2]["total"], base + 12000)
+        self.assertEqual(request(c, "GET", "/users/%d" % last["id"])[2], last)
+        first = request(c, "GET", "/users?limit=1&offset=%d" % (base + 11999))[2]["items"]
+        self.assertEqual(first[0]["id"], last["id"])
 
 
 class Validation(unittest.TestCase):

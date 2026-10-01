@@ -130,19 +130,29 @@ of the server and false of the contract is a defect in the contract); and
 `json.to_int` on a float-spelled integer answered 0, which would have stored
 `"age": 0` silently (hence `schema.to_int`).
 
-**Gaps in the packages underneath, not yet fixed** (each is a small change in
-`lex-sys`; none blocked the example):
+**Gaps in the packages underneath -- found by this example, since fixed** (`lex-sys`,
+`http-server.md` §8, `http.md`, `json.md` §6.1; each with a test that fails without it):
 
-* `server.reply` hard-codes `Content-Type: application/json`, so `problem+json` needs
-  the example's own `reply_as`. The package should take a content type.
-* `http.respond_head` always writes `Content-Length`, so a correct `204 No Content`
-  cannot be produced; `DELETE` answers 200 with the deleted user instead.
-* `json.Writer` cannot splice an already-valid fragment, so the OpenAPI document and
-  the list response are assembled with `Buffer`s (correct by construction, tested
-  by parsing).
-* The storage is fixed-capacity (10,000 users, 4 MiB) because a `res` field cannot
-  be grown through a `&!` reference; a full store is a 503. A framework with a
-  real store needs the in-place `std.conns.put` noted in `http-server.md` §7.
+* `server.reply` hard-coded `Content-Type: application/json`, so `problem+json` needed
+  the example's own `reply_as`. **Fixed:** `server.reply_as` takes the content type.
+* `http.respond_head` always wrote `Content-Length`, so a correct `204 No Content`
+  was impossible and `DELETE` answered 200 with the deleted record. **Fixed:**
+  `http.respond_no_content` / `server.reply_empty` write a `204`/`304` head with
+  neither header; `DELETE` is a `204`, the document declares it with no `content`, and
+  `tests/e2e.py` checks that the answer has no body and neither header and that two
+  pipelined `204`s and a `200` stay framed.
+* `json.Writer` could not splice a fragment, so the OpenAPI document and the list were
+  assembled with `Buffer`s, correct only by construction. **Fixed:**
+  `json.put_fragment` takes any complete JSON value and *checks* it (a fragment that is
+  not exactly one value traps). The document's static `paths` is now a fragment, so a
+  typo stops the service at start-up instead of serving an invalid document.
+* The store was fixed-capacity (10,000 users, 4 MiB) because a `res` field cannot be
+  replaced through a `&!` reference. **Fixed in the example, not in `lex-sys`:** growing
+  takes and returns the `Store` by value, as `std.buffer` and `std.vec` do (reading and
+  deleting still go by reference). It now grows to 100,000 users or 64 MiB;
+  `Growth.test_the_store_grows_past_what_the_old_fixed_arena_held` creates 12,000
+  ~400-byte users (4.8 MB, past the old arena) and fails with a `503` when the arena
+  is capped at the old size.
 
 **What the example does not test yet:** throughput and tail latency against the
 same service in FastAPI (milestone 6), TLS, streaming bodies.

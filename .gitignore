@@ -2,3 +2,6 @@ target/
 *.o
 /tmp/
 build/
+__pycache__/
+.schemathesis/
+.hypothesis/
