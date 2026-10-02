@@ -2,7 +2,7 @@
 //
 // Each query is a function that runs it (`<name>`: the whole reply and a status, 0 for ok) and one
 // accessor per result column (`<name>_<column>`, read from a row as `pg.first_row`/`pg.next_row` give
-// it; `_is_null` where the column can be NULL).
+// it; `_is_null` where the column can be NULL). Call `prepare_all` once after login, before the first query.
 edition 5;
 
 module queries;
@@ -16,7 +16,7 @@ pub fn count_users[&h, &c](heap: &!h Heap, conn: &!c Conn) -> [heap, conn_read, 
     var reply = buffer.empty(heap, 1);
     var status = 0;
     borrow ps as &pr in {
-        let (r, s) = pg.extended(heap, conn, "select count(*) as total from users", pr);
+        let (r, s) = pg.run_named(heap, conn, "count_users", pr);
         buffer.drop(heap, reply);
         reply = r;
         status = s;
@@ -43,7 +43,7 @@ pub fn list_users[&h, &c](heap: &!h Heap, conn: &!c Conn, limit: int, offset: in
     var reply = buffer.empty(heap, 1);
     var status = 0;
     borrow ps as &pr in {
-        let (r, s) = pg.extended(heap, conn, "select id, name, email, age, role, tags from users order by id limit $1 offset $2", pr);
+        let (r, s) = pg.run_named(heap, conn, "list_users", pr);
         buffer.drop(heap, reply);
         reply = r;
         status = s;
@@ -105,7 +105,7 @@ pub fn get_user[&h, &c](heap: &!h Heap, conn: &!c Conn, id: int) -> [heap, conn_
     var reply = buffer.empty(heap, 1);
     var status = 0;
     borrow ps as &pr in {
-        let (r, s) = pg.extended(heap, conn, "select id, name, email, age, role, tags from users where id = $1", pr);
+        let (r, s) = pg.run_named(heap, conn, "get_user", pr);
         buffer.drop(heap, reply);
         reply = r;
         status = s;
@@ -187,7 +187,7 @@ pub fn add_user[&h, &c, &a1, &a2, &a4, &a5](heap: &!h Heap, conn: &!c Conn, name
     var reply = buffer.empty(heap, 1);
     var status = 0;
     borrow ps as &pr in {
-        let (r, s) = pg.extended(heap, conn, "insert into users (name, email, age, role, tags) values ($1, $2, $3, $4, $5) returning id", pr);
+        let (r, s) = pg.run_named(heap, conn, "add_user", pr);
         buffer.drop(heap, reply);
         reply = r;
         status = s;
@@ -208,11 +208,35 @@ pub fn delete_user[&h, &c](heap: &!h Heap, conn: &!c Conn, id: int) -> [heap, co
     var reply = buffer.empty(heap, 1);
     var status = 0;
     borrow ps as &pr in {
-        let (r, s) = pg.extended(heap, conn, "delete from users where id = $1", pr);
+        let (r, s) = pg.run_named(heap, conn, "delete_user", pr);
         buffer.drop(heap, reply);
         reply = r;
         status = s;
     }
     pg.drop_params(heap, ps);
+    return (reply, status);
+}
+
+// Parse every query above on this connection, once, after login: PostgreSQL then parses and plans each
+// one once instead of on every call. Answers the reply of the first refusal (`pg.failure` says what the
+// server objected to) or an empty one, and a status; the queries are not to be run unless both are clean.
+pub fn prepare_all[&h, &c](heap: &!h Heap, conn: &!c Conn) -> [heap, conn_read, conn_write] (buffer.Buffer, int) {
+    var reply = buffer.empty(heap, 1);
+    var status = 0;
+    let (r0, s0) = pg.prepare_after(heap, conn, reply, status, "count_users", "select count(*) as total from users");
+    reply = r0;
+    status = s0;
+    let (r1, s1) = pg.prepare_after(heap, conn, reply, status, "list_users", "select id, name, email, age, role, tags from users order by id limit $1 offset $2");
+    reply = r1;
+    status = s1;
+    let (r2, s2) = pg.prepare_after(heap, conn, reply, status, "get_user", "select id, name, email, age, role, tags from users where id = $1");
+    reply = r2;
+    status = s2;
+    let (r3, s3) = pg.prepare_after(heap, conn, reply, status, "add_user", "insert into users (name, email, age, role, tags) values ($1, $2, $3, $4, $5) returning id");
+    reply = r3;
+    status = s3;
+    let (r4, s4) = pg.prepare_after(heap, conn, reply, status, "delete_user", "delete from users where id = $1");
+    reply = r4;
+    status = s4;
     return (reply, status);
 }

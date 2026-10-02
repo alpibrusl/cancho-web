@@ -3,82 +3,87 @@
     "affected": {
       "sig_id": "4db58cc340da8f5b7a17e0d59980411029b5e8144230706acad6fc10a54321e6",
       "stage_id": "d8631494d3b0da3e387fe84f4b37042012bf6356eff2f1661516954e62d497dd",
-      "source_hash": "681d982bd55cad86702c19e3b5c7300428667742f41f75b48d985e18fab38c73"
+      "source_hash": "f0c40ed32e07d9a2285c1b448fea2c087d80f9928154e4df975b3394a61ce015"
     },
     "base64_encode": {
       "sig_id": "ad41a0534a151e446cc264439eee69498a78a1314d712dcd95bec29468331755",
       "stage_id": "468e480714a7b8f7f7bdcfbf1b5c0b96cb89a7f317b4feb337e6c792725e0faf",
-      "source_hash": "681d982bd55cad86702c19e3b5c7300428667742f41f75b48d985e18fab38c73"
+      "source_hash": "f0c40ed32e07d9a2285c1b448fea2c087d80f9928154e4df975b3394a61ce015"
     },
     "bool_text": {
       "sig_id": "ce4fba7215a9413197bbbaae60ec90482c4fd6b7d6e82b396c14242854bf01a1",
       "stage_id": "ef37536a6d87bda89bd78b9618f9f648fcc0f6873c3e180d26e98ea48883ea43",
-      "source_hash": "681d982bd55cad86702c19e3b5c7300428667742f41f75b48d985e18fab38c73"
+      "source_hash": "f0c40ed32e07d9a2285c1b448fea2c087d80f9928154e4df975b3394a61ce015"
     },
     "drop_params": {
       "sig_id": "25004045a1bd31549e60d36d515b2f912fb43c0ee518012905705df4dc62581a",
       "stage_id": "708d7cdb033d40b5077ee59b8d77925af0cce242a06d8d709a53fc0c19e54de7",
-      "source_hash": "681d982bd55cad86702c19e3b5c7300428667742f41f75b48d985e18fab38c73"
-    },
-    "extended": {
-      "sig_id": "89e06cf7c3f724c5c37ecce2b67946d39e5f3d42115f90c935b3897ed47333ac",
-      "stage_id": "13ec54972323c5226a8ad5796175ceae5ce2691972fc0c479aab7786f30a7208",
-      "source_hash": "681d982bd55cad86702c19e3b5c7300428667742f41f75b48d985e18fab38c73"
+      "source_hash": "f0c40ed32e07d9a2285c1b448fea2c087d80f9928154e4df975b3394a61ce015"
     },
     "failure": {
       "sig_id": "11ce4668a7779c9e28f002b3a7bb314ee1959424f4bc0f53a3043a71988914af",
       "stage_id": "a229a4f06d358af8baedd20f5c1107ba5aa6bd72c16cd61f4c1a8ba9b40f9ff7",
-      "source_hash": "681d982bd55cad86702c19e3b5c7300428667742f41f75b48d985e18fab38c73"
+      "source_hash": "f0c40ed32e07d9a2285c1b448fea2c087d80f9928154e4df975b3394a61ce015"
     },
     "first_row": {
       "sig_id": "ed81b3d25b6f5bf153d41711f6d4a168fc728d2a5dcb490e81e7a4bc2e312502",
       "stage_id": "edaaaa51dc7bd13991dc2534062f26a006c711a6789319dc13012cab6a9956c6",
-      "source_hash": "681d982bd55cad86702c19e3b5c7300428667742f41f75b48d985e18fab38c73"
+      "source_hash": "f0c40ed32e07d9a2285c1b448fea2c087d80f9928154e4df975b3394a61ce015"
     },
     "int_text": {
       "sig_id": "5799a4a72fa2855326b7685e018e16b7a8ac294c6cf2e5901c8c4e659386e6fa",
       "stage_id": "6e9541912a37fe951d426c91b4915a35d96d3213de24d8abac069208a53c4f70",
-      "source_hash": "681d982bd55cad86702c19e3b5c7300428667742f41f75b48d985e18fab38c73"
+      "source_hash": "f0c40ed32e07d9a2285c1b448fea2c087d80f9928154e4df975b3394a61ce015"
     },
     "login": {
       "sig_id": "310ba50f2126e57b373db0747918efff5ff988c85d88667410bce7e1bb77286b",
       "stage_id": "3472dd9fe27a0859c568eb5dc3602050b2753c4a92f9d2f76d093142aed9e0ac",
-      "source_hash": "681d982bd55cad86702c19e3b5c7300428667742f41f75b48d985e18fab38c73"
+      "source_hash": "f0c40ed32e07d9a2285c1b448fea2c087d80f9928154e4df975b3394a61ce015"
     },
     "next_row": {
       "sig_id": "35b8797e32cfe5849fe6b3e34462585ec6ab3a4b3a0250fe292d98272ea62bce",
       "stage_id": "9df01cf6cded4d5a1731bd0cbdec897c6500b887279a54aecc37e3020b0e630f",
-      "source_hash": "681d982bd55cad86702c19e3b5c7300428667742f41f75b48d985e18fab38c73"
+      "source_hash": "f0c40ed32e07d9a2285c1b448fea2c087d80f9928154e4df975b3394a61ce015"
     },
     "param": {
       "sig_id": "2c966a39fa44b644067ffe4989a85075bbf548f5b7ea5fce7d4cf062c758dd6c",
       "stage_id": "8db083f48bb3dc0f9326f7a5260d984baa0c21edcea6e3293aeea413d50b0b78",
-      "source_hash": "681d982bd55cad86702c19e3b5c7300428667742f41f75b48d985e18fab38c73"
+      "source_hash": "f0c40ed32e07d9a2285c1b448fea2c087d80f9928154e4df975b3394a61ce015"
     },
     "param_bool": {
       "sig_id": "bd62a3a48de219ee040736fc4178e9da0cee6f26ead22fd40b23068edb9fde3e",
       "stage_id": "503ece8b8b96bb66b113bf75a3fef59a8fa70d7f0aad3c1717eb36e2c169d522",
-      "source_hash": "681d982bd55cad86702c19e3b5c7300428667742f41f75b48d985e18fab38c73"
+      "source_hash": "f0c40ed32e07d9a2285c1b448fea2c087d80f9928154e4df975b3394a61ce015"
     },
     "param_int": {
       "sig_id": "190d60bd40b33ba08b4754d7fde29d8eb0c9561f18b41ae0aaaf3bf7ef38e68e",
       "stage_id": "a3294f8befcf920dc457df457bb211fae1f666c695fcf3624822530040ee6963",
-      "source_hash": "681d982bd55cad86702c19e3b5c7300428667742f41f75b48d985e18fab38c73"
+      "source_hash": "f0c40ed32e07d9a2285c1b448fea2c087d80f9928154e4df975b3394a61ce015"
     },
     "param_null": {
       "sig_id": "33b6ef122b0cdf52e9ab2680c4ec4e789dc07184e6646a3d4b6387e90eb41d67",
       "stage_id": "5ea9c27a7eeb6e74577dc44a1a15154df264be3e3b9dfd4b29627434ed50fb56",
-      "source_hash": "681d982bd55cad86702c19e3b5c7300428667742f41f75b48d985e18fab38c73"
+      "source_hash": "f0c40ed32e07d9a2285c1b448fea2c087d80f9928154e4df975b3394a61ce015"
     },
     "params": {
       "sig_id": "fdc6a6d36cf80c929437c5415ade3e4a66d9972f0c532c58a763d7d8f616d0a5",
       "stage_id": "9301079e1512832919881db3c4cd0687e93a920b24f4602af6d467a09ae2abdd",
-      "source_hash": "681d982bd55cad86702c19e3b5c7300428667742f41f75b48d985e18fab38c73"
+      "source_hash": "f0c40ed32e07d9a2285c1b448fea2c087d80f9928154e4df975b3394a61ce015"
+    },
+    "prepare_after": {
+      "sig_id": "f79ca18e860562b1c9b4e4d89d9a888b837128fa80224d826f400fa419d45280",
+      "stage_id": "94c96c9171d262dc789384f72097e3fc1879126f35882ff69aa9d79675f954d5",
+      "source_hash": "f0c40ed32e07d9a2285c1b448fea2c087d80f9928154e4df975b3394a61ce015"
+    },
+    "run_named": {
+      "sig_id": "dbafdfe94f5c2594de87eae579c811a8f0d9a28c95135c60f77ab4b60e01edf5",
+      "stage_id": "53d3e8df36ae44cc9c81bd6eb450826b85443a6f3cca0d9bff0907cff772610b",
+      "source_hash": "f0c40ed32e07d9a2285c1b448fea2c087d80f9928154e4df975b3394a61ce015"
     },
     "value": {
       "sig_id": "4cb10d2deac40e03395d5f6da0f05d52dafb27e3cec234f90dee10d28a040b29",
       "stage_id": "16d9283ea485f2ea01905a304e84b7ad2bd42f6d30e74580dd824407fa1793b9",
-      "source_hash": "681d982bd55cad86702c19e3b5c7300428667742f41f75b48d985e18fab38c73"
+      "source_hash": "f0c40ed32e07d9a2285c1b448fea2c087d80f9928154e4df975b3394a61ce015"
     }
   }
 }

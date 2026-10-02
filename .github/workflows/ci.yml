@@ -11,7 +11,7 @@ env:
   # repositories (and the compiler, whose bundled `std` no lock records).
   LEX_SYS_REV: bbeb75f6918105db6e49ec7c642f56009a911b8f
   SCHEMA_REV: 10d30edab333e5cfb5445c430020ed1999872e2f
-  PG_REV: 413b2fe160caf07c3d3955081d9b2ef3c0b4cf28
+  PG_REV: 856b36f1da22c83d974302de163ec261e14ce247
 
 jobs:
   test:

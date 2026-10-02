@@ -36,6 +36,7 @@ BIN = os.environ.get("BIN")
 PROC = None
 PORT = None
 DOC = None
+DB_ARGS = []
 USERS_PG = bool(os.environ.get("USERS_PG"))
 EXAMPLE = "users_pg" if USERS_PG else "users"
 
@@ -60,8 +61,9 @@ def setUpModule():
         # a fresh table: ids start at 1, as they do in a fresh in-memory store
         subprocess.run(["psql", "-q", "-v", "ON_ERROR_STOP=1", "-f", os.path.join(ROOT, "examples", "users_pg", "schema.sql")],
                        env=env, check=True, capture_output=True)
-        args += [env.get("PGHOST", "127.0.0.1"), env.get("PGPORT", "5432"), env.get("PGUSER", "postgres"),
-                 env.get("PGDATABASE", "users_pg"), env.get("PGPASSWORD", "-")]
+        DB_ARGS[:] = [env.get("PGHOST", "127.0.0.1"), env.get("PGPORT", "5432"), env.get("PGUSER", "postgres"),
+                      env.get("PGDATABASE", "users_pg"), env.get("PGPASSWORD", "-")]
+        args += DB_ARGS
     PROC = subprocess.Popen(args, stderr=subprocess.PIPE)
     line = PROC.stderr.readline().decode().strip()
     assert line == "listening on %d" % PORT, line
@@ -282,6 +284,44 @@ class Database(unittest.TestCase):
         status, _, raw = call(c, "POST", "/users", '{"name":"back\\\\u0000"}')
         self.assertEqual(status, 201, raw)
         self.assertEqual(json.loads(raw)["name"], "back\\u0000")
+
+
+@unittest.skipUnless(USERS_PG, "only the PostgreSQL service has a connection to wait on")
+class Copies(unittest.TestCase):
+    """While one blocking copy waits for PostgreSQL another can run: copies share a port with `reuseport`."""
+
+    def spawn(self, port, reuseport):
+        args = [BIN, str(port), *DB_ARGS] + (["reuseport"] if reuseport else [])
+        return subprocess.Popen(args, stderr=subprocess.PIPE)
+
+    def test_copies_share_a_port_only_when_asked(self):
+        port = free_port()
+        procs = []
+        try:
+            for _ in range(2):
+                p = self.spawn(port, True)
+                procs.append(p)
+                self.assertEqual(p.stderr.readline().decode().strip(), "listening on %d" % port)
+            # a third copy that did not ask: the port is taken, and it says so by exiting
+            refused = self.spawn(port, False)
+            procs.append(refused)
+            self.assertNotEqual(refused.wait(timeout=10), 0)
+            self.assertNotIn(b"listening", refused.stderr.read())
+            # both live copies serve: forty new connections, every one answered
+            for _ in range(40):
+                c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+                c.request("GET", "/users?limit=1")
+                r = c.getresponse()
+                self.assertEqual(r.status, 200)
+                r.read()
+                c.close()
+            for p in procs[:2]:
+                self.assertIsNone(p.poll())
+        finally:
+            for p in procs:
+                p.kill()
+                p.wait()
+                p.stderr.close()
 
 
 class Frames(unittest.TestCase):

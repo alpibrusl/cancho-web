@@ -5,11 +5,14 @@ edition 5;
 // that a user lives in a table and the service reaches it through the functions `pgen`
 // wrote from `queries.sql`.
 //
-//     users_pg <port> <db host> <db port> <db user> <db name> <db password|->
+//     users_pg <port> <db host> <db port> <db user> <db name> <db password|-> [reuseport]
+//
+// The eighth argument, whatever it is, lets copies share the port (`reuseport`): see docs/benchmarks.md,
+// "Copies of the blocking service".
 //
 // The table is `schema.sql`; the service does not create it. It holds one connection,
-// opened and logged in before it listens, and every request that needs the database makes
-// a blocking round trip on it: `http.server` is one loop serving every client, so the
+// opened, logged in and given its prepared statements before it listens, and every request
+// that needs the database makes a blocking round trip on it: `http.server` is one loop serving every client, so the
 // loop waits for PostgreSQL and no other request is served in the meantime (design.md of
 // lexsys-pg, sections 4-5, and docs/benchmarks.md say what that costs, measured). If the
 // database does not answer, the request is a 503; the connection is not reopened.
@@ -771,7 +774,7 @@ fn fresh_nonce[&h, &f](heap: &!h Heap, fs: &f Fs("/dev/urandom")) -> [heap, fs_r
     return nonce;
 }
 
-// Log in to the database: 0, or a nonzero status for the exit code.
+// Log in to the database and prepare the queries: 0, or a nonzero status for the exit code.
 fn login[&h, &g, &c, &z](heap: &!h Heap, args: &g Args, conn: &!c Conn, rng: &z Fs("/dev/urandom")) -> [heap, args, conn_read, conn_write, fs_read("/dev/urandom")] int {
     let nonce = fresh_nonce(heap, rng);
     var hello = buffer.empty(heap, 1);
@@ -784,7 +787,30 @@ fn login[&h, &g, &c, &z](heap: &!h Heap, args: &g Args, conn: &!c Conn, rng: &z 
     }
     buffer.drop(heap, nonce);
     buffer.drop(heap, hello);
-    return status;
+    if status != 0 {
+        return status;
+    }
+    // every query is parsed once, on this connection, under its name; a schema that no longer fits
+    // one is refused here, at start-up, and not by the first request that needs it
+    let (refused, prepared) = queries.prepare_all(heap, conn);
+    var bad = prepared;
+    borrow refused as &fr in {
+        if pg.failure(buffer.bytes(fr)) >= 0 {
+            bad = 6;
+        }
+    }
+    buffer.drop(heap, refused);
+    return bad;
+}
+
+// `tcp_listen`'s flags: 1 (SO_REUSEPORT) if there is an eighth argument, so that copies of this service
+// can share a port and the kernel spreads the connections between them. Each copy has its own database
+// connection, so while one waits for PostgreSQL another can run.
+fn listen_flags[&g](args: &g Args) -> [args] int {
+    if arg_count(args) == 8 {
+        return 1;
+    }
+    return 0;
 }
 
 fn main(world: World) -> [] int {
@@ -794,7 +820,7 @@ fn main(world: World) -> [] int {
     var port = 0 - 1;
     var db_port = 0 - 1;
     borrow args as &g in {
-        if arg_count(g) == 7 {
+        if arg_count(g) == 7 || arg_count(g) == 8 {
             port = number_of(arg(g, 1));
             db_port = number_of(arg(g, 3));
         }
@@ -813,7 +839,7 @@ fn main(world: World) -> [] int {
                                 borrow rng as &z in {
                                     if login(h, g, ch, z) == 0 {
                                         status = 3;
-                                        match tcp_listen(nn, port, 1024, 0) {
+                                        match tcp_listen(nn, port, 1024, listen_flags(g)) {
                                             Listening::Ok(l) => {
                                                 var listener = l;
                                                 borrow mut listener as &!lh in {
