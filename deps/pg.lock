@@ -20,11 +20,6 @@
       "stage_id": "708d7cdb033d40b5077ee59b8d77925af0cce242a06d8d709a53fc0c19e54de7",
       "source_hash": "f0c40ed32e07d9a2285c1b448fea2c087d80f9928154e4df975b3394a61ce015"
     },
-    "extended": {
-      "sig_id": "89e06cf7c3f724c5c37ecce2b67946d39e5f3d42115f90c935b3897ed47333ac",
-      "stage_id": "13ec54972323c5226a8ad5796175ceae5ce2691972fc0c479aab7786f30a7208",
-      "source_hash": "681d982bd55cad86702c19e3b5c7300428667742f41f75b48d985e18fab38c73"
-    },
     "failure": {
       "sig_id": "11ce4668a7779c9e28f002b3a7bb314ee1959424f4bc0f53a3043a71988914af",
       "stage_id": "a229a4f06d358af8baedd20f5c1107ba5aa6bd72c16cd61f4c1a8ba9b40f9ff7",
