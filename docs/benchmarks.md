@@ -398,3 +398,8 @@ session, median of three 5-second rounds for reads and a page, and ten runs for 
 
 The client under this service, one connection against libpq and the Python clients, is in that document too
 (section 9.2): level with libpq one query at a time, about 2.3x slower pipelined, cause not found.
+
+### Two threads in one process
+
+[`examples/users_threads`](../examples/users_threads/users_threads.ls) runs the unchanged `users` loop in two threads, one `SO_REUSEPORT` listener, forked heap and forked clock each (lex-sys `docs/parallelism.md` section 9). Same workload as "Copies of the blocking service" (invalid `POST /users`, server on cores 0-1, load generator on 2-3), interleaved with two processes in three rounds of five runs: **threads 149,380 a second** (median of 15), **processes 141,208**; the ranges overlap almost completely, so the result is that threads are *not worse*, not that they are faster. A stateless service shares nothing either way; what threads add is the possibility of sharing a store, which is not built (each thread keeps its own, so this example is not a deployable service). Reproduced by lex-sys's `benches/parallel/threads_users.sh`.
+
