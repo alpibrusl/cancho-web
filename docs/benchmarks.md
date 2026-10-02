@@ -41,21 +41,24 @@ Requests a second, median of 3:
 
 | | GET one user | GET a page of 20 | POST, invalid (422) | POST, create |
 |---|---:|---:|---:|---:|
-| **lex-sys users** | **120,342** | **39,350** | **93,414** | **73,976** |
-| FastAPI, uvicorn (asyncio) | 4,921 | 4,300 | 3,481 | 4,182 |
-| FastAPI, uvloop + httptools | 4,675 | 4,144 | 3,532 | 4,100 |
-| FastAPI lean, uvloop + httptools | 5,232 | 4,556 | 3,401 | 4,495 |
+| **lex-sys users** | **128,972** | **70,768** | **94,659** | **64,327** |
+| FastAPI, uvicorn (asyncio) | 4,828 | 4,028 | 3,545 | 4,091 |
+| FastAPI, uvloop + httptools | 4,851 | 4,208 | 3,456 | 4,129 |
+| FastAPI lean, uvloop + httptools | 5,216 | 4,604 | 3,606 | 4,163 |
 
-About **23x** on a read, **9x** on a page, **26x** on a rejected body and **16x** on a
-create, against the best FastAPI figure in each column.
+About **25x** on a read, **15x** on a page, **26x** on a rejected body and **15x** on a
+create, against the best FastAPI figure in each column. (These are the figures of the run
+after the page endpoint was fixed, see "Against Go" below; the first run of this document
+had the page at 39,350, 9x. Create is the noisiest column: identical binaries span
+65,000-79,000 across runs, so 15-18x is the honest range there.)
 
 Latency of `GET one user` under that load (32 requests in flight, so each figure is a
 service time *plus the queue of the others*):
 
 | | p50 | p90 | p99 | p99.9 | max |
 |---|---:|---:|---:|---:|---:|
-| lex-sys users | 159 µs | 211 µs | 362 µs | 944 µs | 17.1 ms |
-| FastAPI, uvicorn | 5.0 ms | 8.6 ms | 14.0 ms | 24.3 ms | 42.9 ms |
+| lex-sys users | 156 µs | 270 µs | 442 µs | 1.1 ms | 17.0 ms |
+| FastAPI, uvicorn | 5.2 ms | 8.3 ms | 11.8 ms | 14.8 ms | 17.3 ms |
 
 ## How to read it
 
@@ -66,11 +69,11 @@ service time *plus the queue of the others*):
   up the network layer, change almost nothing (they are within noise of plain asyncio, and
   slightly lower on two columns), and the lean variant -- no response validation -- gains
   about 10%. What is left is routing, dependency resolution and pydantic.
-* **The page is the narrowest gap (9x), and the reason is in the service.** Listing 20
-  users splices 20 stored JSON values through `json.put_fragment`, each checked by the
-  strict parser. That check costs, and it is the price of a writer that cannot produce an
-  invalid document. Rendering from structured data instead of re-validating stored text
-  would be faster and is not done here.
+* **The page was the narrowest gap, and the reason was in the service -- since fixed.**
+  Listing 20 users spliced 20 stored JSON values through `json.put_fragment`, each checked
+  by the strict parser, though each was the program's own canonical output. Splicing them
+  as bytes took the page from about 40,000 to 62,000 requests a second, and a one-pass
+  `std.buffer.append` (lex-sys `docs/http-server.md` §9) to 71,000.
 * **Nothing here measures TLS, a database, or a real handler's work.** A service that
   spends 5 ms in a query is 5 ms slower in both. The comparison is of the *framework's
   own* cost per request, which is what a framework chooses.
@@ -110,55 +113,61 @@ part of `run.sh`, and both found things (below).
 
 ### Results
 
-Requests a second, median of 3 (the FastAPI row is the best of its three set-ups):
+Requests a second, median of 3 (the FastAPI row is the best of its three set-ups in each
+column; the figures are of the run after the page endpoint was fixed):
 
 | | GET one user | GET a page of 20 | POST, invalid (422) | POST, create |
 |---|---:|---:|---:|---:|
-| C ceiling (canned reply) | 137,203 | -- | -- | -- |
-| C floor | 112,880 | 99,904 | 107,945 | 94,848 |
-| **lex-sys users** | **119,852** | **40,755** | **92,070** | **69,446** |
-| Go `net/http` | 77,593 | 65,296 | 61,539 | 49,436 |
-| FastAPI, best of three | 5,145 | 4,524 | 3,632 | 4,238 |
+| C ceiling (canned reply) | 137,180 | -- | -- | -- |
+| C floor | 117,958 | 105,523 | 107,680 | 91,783 |
+| **lex-sys users** | **128,972** | **70,768** | **94,659** | **64,327** |
+| Go `net/http` | 79,772 | 65,654 | 60,278 | 53,580 |
+| FastAPI, best of three | 5,216 | 4,604 | 3,606 | 4,163 |
 
 | lex-sys against | GET one | page | invalid | create |
 |---|---:|---:|---:|---:|
-| Go | **1.5x** | **0.62x** | **1.5x** | **1.4x** |
-| C floor | 1.06x (a tie) | 0.41x | 0.85x | 0.73x |
-| C ceiling | 0.87x | | | |
+| Go | **1.6x** | **1.08x** | **1.6x** | **1.2x** |
+| C floor | 1.09x (a tie) | 0.67x | 0.88x | 0.70x |
+| C ceiling | 0.94x | | | |
 
 Latency of GET one user under the same load (32 requests in flight; microseconds):
 
 | | p50 | p90 | p99 | p99.9 | max |
 |---|---:|---:|---:|---:|---:|
-| C ceiling | 138 | 220 | 378 | 953 | 23,927 |
-| lex-sys users | 167 | 250 | 408 | 1,312 | 7,249 |
-| C floor | 178 | 245 | 430 | 1,261 | 6,629 |
-| Go `net/http` | 316 | 484 | 809 | 2,013 | 4,935 |
-| FastAPI, uvicorn | 5,113 | 8,574 | 11,970 | 14,585 | 19,169 |
+| C ceiling | 137 | 222 | 404 | 1,513 | 35,118 |
+| lex-sys users | 156 | 270 | 442 | 1,140 | 16,995 |
+| C floor | 178 | 269 | 433 | 1,158 | 19,645 |
+| Go `net/http` | 325 | 483 | 850 | 1,770 | 6,937 |
+| FastAPI, uvicorn | 5,161 | 8,318 | 11,842 | 14,805 | 17,341 |
 
 ### What it says
 
-* **On a read, lex-sys is where a hand-written C server is, and 13% under the kernel's
-  limit.** The two are within noise (119,852 against 112,880), and the ceiling shows why
-  there is little room above them: one core spends about 7 microseconds a request in the
-  socket path, `epoll_wait`, `read` and `send`, before any server code runs. The C floor
-  being *slower* than lex-sys on a read is not a claim that lex-sys beats C -- the floor
-  formats its headers with `snprintf` and was not tuned further; it is a reminder that the
-  floor is a hand-written baseline, and the ceiling is the bound.
-* **It is ahead of Go by about 1.5x on everything but a page**, with half the p99. That is
-  Go's goroutine-per-connection runtime and GC on one core, against a loop with neither;
-  it is not a statement about Go with several cores, which was not measured.
-* **The page is where lex-sys loses, and the cause is known.** 20 users spliced into a page
-  cost lex-sys about 25 microseconds and the C floor about 10: `put_fragment` re-parses each
-  stored user with the strict parser (§"How to read it" above). Go beats it too, 1.6x. A page
-  rendered from structured data instead of re-validated text is the obvious change and is not
-  made here, so the figure stands as measured.
-* **On a create lex-sys serves 27% fewer requests a second than the C floor, and on a
-  rejected body 15% fewer.** Probably because it parses, validates and writes the canonical
-  answer in separate passes where the floor does all three in one; that was not profiled.
+* **On a read, lex-sys is where a hand-written C server is, and at 94% of the kernel's
+  limit.** The ceiling shows why there is little room above: one core spends about 7
+  microseconds a request in the socket path, `epoll_wait`, `read` and `send`, before any
+  server code runs. The C floor being no faster than lex-sys on a read is not a claim that
+  lex-sys beats C -- the floor formats its headers with `snprintf` and was not tuned further;
+  it is a reminder that the floor is a hand-written baseline, and the ceiling is the bound.
+* **It is ahead of Go on every workload**, by 1.6x on a read and a rejected body, 1.2x on a
+  create, and 1.08x on a page (within noise there), with half the p99. That is Go's
+  goroutine-per-connection runtime and GC on one core, against a loop with neither; it is
+  not a statement about Go with several cores, which was not measured.
+* **The page was where lex-sys lost, twice over, and both causes were found by this
+  comparison.** The first run had it at 40,755, 0.62x of Go and 0.41x of the C floor. The
+  application re-parsed each stored user with the strict parser although it had itself
+  rendered it (fixed: the users are spliced as bytes, 62,000), and `std.buffer.append` copied a
+  byte at a time through `push`, which checks the capacity and rebuilds the buffer for every
+  byte (fixed in lex-sys: 71,000). What remains against the C floor (0.67x) is the same shape:
+  the page is still copied twice as bytes, once into the page and once into the reply, and the
+  language has no slice-copy primitive (`bulk-io.md` §4 there).
+* **On a create or a rejected body lex-sys serves 12-30% fewer requests than the C floor.**
+  Probably because it parses, validates and writes the canonical answer in separate passes
+  where the floor does all three in one; that was not profiled. Create is also the noisiest
+  workload: the same two binaries, alternated, gave 65,209-78,951 on a create.
 * **The load generator was checked, not assumed.** `kload` used about 3.4 s of CPU in 5 on its
   two cores, and giving it a third core did not raise the ceiling's throughput (131,000-142,000
-  either way), so it is not what limits the figures in this table.
+  either way), so it is not what limits the figures in this table. (It could not read a
+  response over 4 KB until this change -- a page of 50 users or more -- and now reads 64 KiB.)
 
 ### What the cross-checks found
 

@@ -187,6 +187,39 @@ class Users(unittest.TestCase):
         self.assertEqual([u["id"] for u in second["items"]], live[2:4])
         self.assertEqual(request(c, "GET", "/users?offset=100000")[2]["items"], [])
 
+    def test_a_page_is_the_users_as_answered_one_by_one(self):
+        # The page is spliced from stored bytes, not rendered again, so it must be
+        # exactly the answers of `GET /users/:id` joined -- whatever the stored users
+        # look like, with holes left by deletes, with an offset, and past the 4 KB a
+        # naive client buffer holds.
+        c = conn()
+        made = []
+        for i in range(30):
+            body = {"name": "n\u00e9 %d \"q\" \\ \U0001F600" % i}
+            if i % 2:
+                body["email"] = "e%d@example.org" % i
+            if i % 3 == 0:
+                body["age"] = i
+            if i % 4 == 0:
+                body["role"] = ["admin", "user", "guest"][i % 3]
+            if i % 5 == 0:
+                body["tags"] = ["t%d" % j for j in range(i % 8)]
+            made.append(request(c, "POST", "/users", body)[2]["id"])
+        for gone in (made[3], made[10], made[11]):
+            self.assertEqual(call(c, "DELETE", "/users/%d" % gone)[0], 204)
+        for query in ("limit=100", "limit=7&offset=3", "limit=100&offset=5", "limit=1"):
+            status, _, raw = call(c, "GET", "/users?" + query)
+            self.assertEqual(status, 200)
+            page = json.loads(raw)
+            singles = [call(c, "GET", "/users/%d" % u["id"])[2] for u in page["items"]]
+            self.assertEqual(raw, b'{"total":%d,"items":[' % page["total"] + b",".join(singles) + b"]}", query)
+        for i in range(100):
+            request(c, "POST", "/users", {"name": "padding-%03d-%s" % (i, "x" * 40)})
+        total = json.loads(call(c, "GET", "/users?limit=1")[2])["total"]
+        raw = call(c, "GET", "/users?limit=100&offset=%d" % (total - 100))[2]  # the padding users
+        self.assertGreater(len(raw), 4096)
+        self.assertEqual(len(json.loads(raw)["items"]), 100)
+
     def test_a_deleted_user_leaves_the_listing_and_the_total(self):
         c = conn()
         a = request(c, "POST", "/users", {"name": "gone"})[2]["id"]

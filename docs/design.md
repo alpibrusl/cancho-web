@@ -154,5 +154,14 @@ of the server and false of the contract is a defect in the contract); and
   ~400-byte users (4.8 MB, past the old arena) and fails with a `503` when the arena
   is capped at the old size.
 
-**What the example does not test yet:** throughput and tail latency against the
-same service in FastAPI (milestone 6), TLS, streaming bodies.
+**What the benchmark found** (`docs/benchmarks.md`): the comparison with Go and C
+showed the page endpoint at 0.62x of Go, for two reasons, both fixed. The example
+re-validated stored users with `json.put_fragment` although the store only ever holds
+what `render_user` wrote from a body that had just validated, so the page now splices
+them as bytes (40,000 -> 62,000 requests a second); and `std.buffer.append` in `lex-sys`
+copied one byte at a time through `push` (62,000 -> 71,000, lex-sys PR #181). The first is
+a design point for the framework layer: a value validated on the way in and rendered by
+the program itself should not be validated again on the way out. `put_fragment` stays
+for what the program did *not* render.
+
+**What the example does not test yet:** TLS, streaming bodies, more than one core.
