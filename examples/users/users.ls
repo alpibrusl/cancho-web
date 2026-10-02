@@ -497,12 +497,15 @@ fn list[&h, &st, &q](heap: &!h Heap, store: &st Store, query: &q [byte], out: bu
     if offset < 0 {
         return problem(heap, out, 422, "Unprocessable Content", "offset must be a non-negative integer", keep);
     }
-    var w = json.writer(heap, 256);
-    w = json.begin_object(heap, w);
-    w = json.put_key(heap, w, "total");
-    w = json.put_int(heap, w, store.live);
-    w = json.put_key(heap, w, "items");
-    w = json.begin_array(heap, w);
+    // The page is spliced together from stored users. Each is already a complete,
+    // canonical JSON value -- `create` stored what `render_user` wrote from a body
+    // that had just validated, and nothing else ever enters the store -- so the
+    // page is assembled as bytes and the users are not parsed a second time.
+    // (`json.put_fragment` would check each one; that check cost this endpoint
+    // more than half its time.)
+    var page = buffer.append(heap, buffer.empty(heap, 2048), "{\"total\":");
+    page = buffer.push_nat(heap, page, store.live);
+    page = buffer.append(heap, page, ",\"items\":[");
     var skipped = 0;
     var taken = 0;
     var id = 1;
@@ -511,21 +514,21 @@ fn list[&h, &st, &q](heap: &!h Heap, store: &st Store, query: &q [byte], out: bu
             if skipped < offset {
                 skipped = skipped + 1;
             } else {
-                // Each stored user is already a complete JSON value.
-                w = json.put_fragment(heap, w, store_get(store, id));
+                if taken > 0 {
+                    page = buffer.append(heap, page, ",");
+                }
+                page = buffer.append(heap, page, store_get(store, id));
                 taken = taken + 1;
             }
         }
         id = id + 1;
     }
-    w = json.end_array(heap, w);
-    w = json.end_object(heap, w);
-    let body = json.finish(w);
+    page = buffer.append(heap, page, "]}");
     var answer = out;
-    borrow body as &bb in {
-        answer = server.reply(heap, answer, 200, buffer.bytes(bb), keep);
+    borrow page as &pb in {
+        answer = server.reply(heap, answer, 200, buffer.bytes(pb), keep);
     }
-    buffer.drop(heap, body);
+    buffer.drop(heap, page);
     return answer;
 }
 

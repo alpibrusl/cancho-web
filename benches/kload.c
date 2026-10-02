@@ -9,6 +9,9 @@
 // KLOAD_EXPECT=200 counts every response with another status as wrong and fails the
 // run (exit 1) if there was one: a server that answers 500 quickly is not fast.
 //
+// A response may be up to 64 KiB (a page of 100 users is about 9 KiB); a longer one is a
+// "short read" failure, not a miscount.
+//
 // KLOAD_REQUESTS=N stops after N responses in total instead of after <seconds> (and
 // reports requests a second over the time that took): for a workload that adds state
 // per request, where "as many as fit in five seconds" would fill the store.
@@ -39,7 +42,7 @@ static int cmp(const void *a, const void *b) { unsigned x = *(const unsigned*)a,
 static int readresp(int fd, char *buf) {          // one response, by Content-Length; returns bytes or -1
   int have = 0, need = -1, head = -1;
   for (;;) {
-    int n = read(fd, buf + have, 4096 - have); if (n <= 0) return -1; have += n; buf[have] = 0;
+    int n = read(fd, buf + have, 65535 - have); if (n <= 0) return -1; have += n; buf[have] = 0;
     if (head < 0) { char *e = strstr(buf, "\r\n\r\n"); if (!e) continue; head = e - buf + 4;
       char *c = strcasestr(buf, "content-length: "); need = head + (c ? atoi(c + 16) : 0); }
     if (have >= need) return have;
@@ -49,7 +52,7 @@ static void *run(void *a) {
   long id = (long)a; char req[2048];
   if (!strcmp(method, "GET")) snprintf(req, sizeof req, "GET %s HTTP/1.1\r\nHost: x\r\n\r\n", path);
   else snprintf(req, sizeof req, "%s %s HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: %zu\r\n\r\n%s", method, path, strlen(body), body);
-  int *fds = malloc(sizeof(int) * K); unsigned long long *sent = malloc(sizeof(unsigned long long) * K); char buf[4096]; struct sockaddr_in sa = {0}; sa.sin_family = AF_INET; sa.sin_port = htons(port); inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr);
+  int *fds = malloc(sizeof(int) * K); unsigned long long *sent = malloc(sizeof(unsigned long long) * K); char buf[65536]; struct sockaddr_in sa = {0}; sa.sin_family = AF_INET; sa.sin_port = htons(port); inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr);
   for (int i = 0; i < K; i++) { fds[i] = socket(AF_INET, SOCK_STREAM, 0); int one = 1; setsockopt(fds[i], IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
     if (connect(fds[i], (struct sockaddr*)&sa, sizeof sa) < 0) { perror("connect"); exit(1); } }
   while (!stop && (!budget || counts[id] < budget)) {
