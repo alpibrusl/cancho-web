@@ -156,7 +156,9 @@ build/users_pg 8080 127.0.0.1 5432 postgres users_pg -         # <port> <db host
 It holds one connection and each request that needs the database blocks the loop for a round trip. Each query is prepared once at start-up (`queries.prepare_all`). Measured
 ([`docs/benchmarks.md`](docs/benchmarks.md#on-postgresql)): a read is 14,976 requests a second, 5.1x lean
 FastAPI + asyncpg and 13.9x FastAPI + SQLAlchemy, and 61% of what PostgreSQL itself does with the same
-prepared lookup -- the rest is PostgreSQL waiting while the one loop works; a create is 4,404 a second.
+prepared lookup -- the rest is PostgreSQL waiting while the one loop works. Give it an eighth argument
+(`reuseport`) and run two or three copies on a core and a read reaches 24,211 a second, PostgreSQL's own
+ceiling; writes (a create, 2,100 to 4,400 a second for one copy: they are noisy) gain from several connections too.
 
 ## How it is written
 

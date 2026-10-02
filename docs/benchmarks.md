@@ -253,9 +253,10 @@ insert; no HTTP, no framework), transactions a second:
   [measured below](#prepared-statements).
 * **A write is not CPU-bound: it waits for `fsync`.** One connection makes one commit at a time: 2,676 creates
   a second is about **370 microseconds each**, with the loop blocked the whole time (so a read behind a write
-  waits too). *Correction, from the prepared-statement run below:* I attributed all of the 370 microseconds to the
-  commit, and about 140 of them were PostgreSQL parsing and planning the `INSERT` on every call; with the
-  statement prepared a create is about 230 microseconds, and that is the figure that is mostly `fsync`. `pgbench`'s 16 clients get 8,304 inserts
+  waits too). *Correction:* this paragraph went on to say that preparing the statement took about 140 of those
+  microseconds off. That was read from one median of three that was at the top of a very wide range
+  ([below](#copies-of-the-blocking-service): ten runs of the same build span 2.1k to 4.2k creates a second), and
+  is withdrawn: what a prepared `INSERT` saves is **not established** here. `pgbench`'s 16 clients get 8,304 inserts
   a second because PostgreSQL commits several of them per `fsync` (group commit); one connection never can.
   Lean FastAPI has ten connections and reaches 2,375 a second, where Python, not the database, is the limit
   (it was at its core's limit on reads; not separately measured here for writes). A service
@@ -305,12 +306,47 @@ parsing every time, **24,717 prepared**; the same insert: 8,960 and 11,705.
   remaining ~19 are PostgreSQL's core sitting idle while the single loop parses the next HTTP request and
   renders the answer. That idle is what one blocking connection costs once the database is fast, and what a
   pool or a connection that does not block the loop would fill (lexsys-pg design.md section 5).
-* **A page gained 16%**, not 53%: it is two round trips (80 of its 222 microseconds at the prepared ceiling) and
+* **A page gained 16%** (3,865 to 4,496; smaller than a read's gain, and its repeats agree within a few percent), not 53%: it is two round trips (80 of its 222 microseconds at the prepared ceiling) and
   the rest is the service rendering 20 rows, each through a JSON writer and a validated fragment for its tags.
   Not profiled here; it is where to look next for that endpoint.
-* **A create gained 60%** (4,404 against 2,748), more than a durable commit's `fsync` could explain on its own:
-  parsing and planning an `INSERT` is more work than for a lookup, and a create went from 364 to 227
-  microseconds. Lean FastAPI creates at 2,657 with ten connections; lex-sys with one is at 1.7x that.
+* **A create: no conclusion.** 4,404 against 2,748 looked like a 60% gain, and I wrote it up as one. It is not
+  one: re-running the prepared build alone, ten runs at one copy gave 2,155 to 4,245 creates a second (medians of
+  five: 2,746 and 2,609), so 4,404 was the top of the noise and 2,748 sits in the middle of it. Writes depend on
+  the disk's state in a way reads do not. What a create costs, and whether preparing helps it, needs many more runs
+  than three; only the reads and pages above are measured well enough to compare.
 * **A rejected body** (no database) is unchanged, 95,328 against 90,902, within noise: nothing here touched that path.
 
 Reproduce with `UNPREPARED_BIN=<the older build> benches/run_pg.sh` (it adds the "before" row).
+
+### Copies of the blocking service
+
+The cheapest way past one blocking connection needs no new code: run several copies of the service on the same
+core, sharing a port (`SO_REUSEPORT`, the service's eighth argument; the kernel spreads the connections). Each
+copy has its own database connection, so while one waits for PostgreSQL another runs. All copies are pinned to
+the one core the single service had; PostgreSQL stays on its own and the load generator on two more.
+`benches/run_pg_copies.sh` reproduces it; requests a second, median of 3 (creates: see below):
+
+| copies on core 0 | GET one user | GET a page of 20 | POST, create |
+|---:|---:|---:|---:|
+| 1 | 15,011 | 4,764 | 2,634 |
+| 2 | 22,604 | 5,456 | 4,048 |
+| 3 | **24,211** | **6,224** | 4,298 |
+| 4 | 23,881 | 5,852 | 5,685 |
+
+* **Two copies take a read from 61% of PostgreSQL's prepared ceiling to 91% of it** (22,604 of 24,717), and three
+  reach it (24,211): the idle ~19 microseconds the previous section found are filled by the other copy's work. More
+  than three adds nothing, because PostgreSQL is then the limit, and nothing is lost: the copies cost memory, not
+  throughput. So on a read-heavy service the blocking model, with a handful of copies, is within a few percent
+  of PostgreSQL itself, and the single loop's ceiling is not the problem it looked like.
+* **A page** gains 31% at three copies (4,764 to 6,224): it is the one workload whose limit is the service's own
+  rendering, which copies on one core do not shorten.
+* **A write gains, and by more than the reads' pattern predicts.** Creates are noisy (above), so these are ten
+  runs each at one and at four copies, medians of five twice: **one copy 2,746 and 2,609; four copies 6,659 and
+  6,290**, runs from 4.9k to 7.2k at four and from 2.2k to 4.2k at one. Concurrent connections let PostgreSQL commit
+  several inserts per `fsync` (`pgbench`, 16 clients: 11,705); one connection cannot, and a single non-blocking
+  connection that *pipelines* its queries still commits them one `Sync` at a time. This is the case for several
+  connections, not for non-blocking I/O as such.
+* **What this does not buy.** Copies share nothing: no cache, no counters, no connection pool a request could
+  borrow from, each holds its own PostgreSQL backend (a server's `max_connections` is a limit), and a query that
+  takes a second still blocks *that copy's* clients. A service with state in memory, or with slow queries, wants the
+  loop to keep serving while a query is pending -- which is the design in lexsys-pg's `docs/nonblocking.md`.
