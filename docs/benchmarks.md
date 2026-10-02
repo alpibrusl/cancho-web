@@ -274,8 +274,8 @@ insert; no HTTP, no framework), transactions a second:
   more.
 * **A PostgreSQL on its own core.** With it sharing the server's core, a blocking client and an asynchronous one
   would both slow down, and not by the same amount.
-* **Pool sizes** other than 10 for FastAPI, and a lex-sys service with more than one connection (which it cannot
-  have until the connection stops blocking the loop).
+* **Pool sizes** other than 10 for FastAPI, and a lex-sys service with more than one connection (which it could not
+  have until the connection stopped blocking the loop; it can now: [below](#a-pool-in-one-process)).
 * **Go, Rust and Node** with a database; and the cost of TLS to PostgreSQL, which `lexsys-pg` cannot do yet.
 
 ### Prepared statements
@@ -338,6 +338,10 @@ the one core the single service had; PostgreSQL stays on its own and the load ge
   than three adds nothing, because PostgreSQL is then the limit, and nothing is lost: the copies cost memory, not
   throughput. So on a read-heavy service the blocking model, with a handful of copies, is within a few percent
   of PostgreSQL itself, and the single loop's ceiling is not the problem it looked like.
+  > **Corrected (see [A pool in one process](#a-pool-in-one-process)).** "PostgreSQL's prepared ceiling" in this
+  > bullet is the 24,717 a second that `pgbench` reaches, which pays a round trip per query. It is not a ceiling:
+  > one pipelined connection reaches 64,000-66,000 a second on the same lookup, so "three copies are within a few
+  > percent of PostgreSQL itself" was wrong, and what the copies fill is a gap that pipelining fills better.
 * **A page** gains 31% at three copies (4,764 to 6,224): it is the one workload whose limit is the service's own
   rendering, which copies on one core do not shorten.
 * **A write gains, and by more than the reads' pattern predicts.** Creates are noisy (above), so these are ten
@@ -350,3 +354,47 @@ the one core the single service had; PostgreSQL stays on its own and the load ge
   borrow from, each holds its own PostgreSQL backend (a server's `max_connections` is a limit), and a query that
   takes a second still blocks *that copy's* clients. A service with state in memory, or with slow queries, wants the
   loop to keep serving while a query is pending -- which is the design in lexsys-pg's `docs/nonblocking.md`.
+
+### A pool in one process
+
+`users_pg` with a ninth argument -- `users_pg <port> <host> <port> <user> <db> <password|-> <reuseport|-> <n>` -- holds
+`n` database connections in a `pg.pool` (`lexsys-pg`, `docs/nonblocking.md`) and no longer waits for any of them: a
+request that needs the database is held (`http.server`'s `hold`), its query is queued, the loop goes on to the next
+request, and the held one is answered when the poller says the reply is in. Every handler is two halves (`begin`
+checks the request and encodes the query, `conclude` reads the reply), which the blocking service runs back to back.
+The same 29 tests pass against both, with 6 more for the pool (`tests/e2e.py`, `USERS_PG_POOL=n` runs the whole
+suite against it); the same 24 requests get byte-identical answers from both.
+
+**The property that was missing.** A query held behind a table lock for a second; 100 `GET /health` to the same
+process meanwhile: the pool's median 0.14 ms and **maximum 0.76 ms**; the blocking service **645 ms**.
+
+**Throughput.** Server on core 0, PostgreSQL on core 1, `kload` on cores 2 and 3; requests a second, the same
+session, median of three 5-second rounds for reads and a page, and ten runs for creates (`benches/run_pool.sh`;
+`benches/run_pg_copies.sh` for the copies):
+
+| | GET one user | GET a page of 20 | POST, create (median of 10; range) |
+|---|---:|---:|---:|
+| blocking, 1 copy | 15,638 | 4,524 | 2,317 (3 runs) |
+| blocking, 3 copies on core 0 | 25,180 | 6,361 | 7,065 (3 runs) |
+| blocking, 4 copies on core 0 | | | 5,818 (4,528-8,329) |
+| **pool, 1 connection** | **63,980 / 65,894 / 64,262** (three runs) | 7,894-8,409 | 3,818 (3,190-5,306) |
+| pool, 2 connections | 58,681 | 8,169 | 5,266 (4,659-7,555) |
+| **pool, 4 connections** | 45,056 | 7,420 | **8,091 (6,836-10,776)** |
+
+* **A read: one connection is 4.1x the blocking service and 2.5x three copies.** The ~19 microseconds of
+  PostgreSQL idling per query that copies fill with other work, a pipelining connection never creates: the queue is
+  never empty. This is more than the ceiling the previous sections used (24,717, `pgbench`'s: one query, one round
+  trip), which is why that figure is corrected above.
+* **More connections make reads slower** (65,000 to 45,000 from one to four): PostgreSQL's backends share its one
+  core, and four of them switch where one pipelines. Reads want one connection, writes several.
+* **A write wants the pool of four, and beats four copies on the median** (8,091 against 5,818, 39% more) **with
+  ranges that overlap** (the best copy run, 8,329, is above the pool's median). It does it with one process,
+  one core and four backends, not four processes; creates are the noisiest column here, so read the ranges.
+* **A page is two round trips and gains less** (about 8,000 against 4,524 blocking, 1.8x): its limit is the service's
+  own rendering, as with copies.
+* **What it does not buy.** A slow query holds up the requests queued behind it *on its own connection* (in order),
+  not the others; there is no reconnecting after a database restart (database routes answer 503 until the service is
+  restarted) and no per-request deadline. `lexsys-pg`'s `docs/nonblocking.md` section 9 lists what is open.
+
+The client under this service, one connection against libpq and the Python clients, is in that document too
+(section 9.2): level with libpq one query at a time, about 2.3x slower pipelined, cause not found.

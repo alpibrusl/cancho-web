@@ -153,12 +153,24 @@ scripts/build.sh examples/users_pg/users_pg.ls build/users_pg
 build/users_pg 8080 127.0.0.1 5432 postgres users_pg -         # <port> <db host> <db port> <db user> <db> <password|->
 ```
 
-It holds one connection and each request that needs the database blocks the loop for a round trip. Each query is prepared once at start-up (`queries.prepare_all`). Measured
+By default it holds one connection and each request that needs the database blocks the loop for a round trip.
+Each query is prepared once at start-up (`queries.prepare_all`). Measured
 ([`docs/benchmarks.md`](docs/benchmarks.md#on-postgresql)): a read is 14,976 requests a second, 5.1x lean
-FastAPI + asyncpg and 13.9x FastAPI + SQLAlchemy, and 61% of what PostgreSQL itself does with the same
-prepared lookup -- the rest is PostgreSQL waiting while the one loop works. Give it an eighth argument
-(`reuseport`) and run two or three copies on a core and a read reaches 24,211 a second, PostgreSQL's own
-ceiling; writes (a create, 2,100 to 4,400 a second for one copy: they are noisy) gain from several connections too.
+FastAPI + asyncpg and 13.9x FastAPI + SQLAlchemy -- the rest is PostgreSQL waiting while the one loop works.
+Give it an eighth argument (`reuseport`, or `-` for none) and a ninth, a number of connections, and it stops
+waiting:
+
+```
+build/users_pg 8080 127.0.0.1 5432 postgres users_pg - - 4     # ... <password|-> <reuseport|-> <connections>
+```
+
+A request that needs the database is held, its query is queued on a `pg.pool` of that many connections, and the
+loop goes on; the answer is sent when it arrives. `GET /health` stays under a millisecond while a query waits a
+second on a lock (the blocking service: 645 ms), and in one process on one core a read reaches about 64,000 a
+second with one connection (the blocking service: 15,638; three copies: 25,180) and a create 8,091 with four
+(four blocking copies: 5,818; the ranges overlap) --
+[`docs/benchmarks.md`](docs/benchmarks.md#a-pool-in-one-process) has the setup, the ranges and what it does not
+do. The same 29 tests pass against both, plus 6 for the pool (`USERS_PG_POOL=2 USERS_PG=1 python3 tests/e2e.py`).
 
 ## How it is written
 

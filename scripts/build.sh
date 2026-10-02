@@ -11,7 +11,7 @@
 #   LEX_SYS_DIR    a checkout of lex-sys           (default: ../lex-sys)
 #   SCHEMA_DIR     a checkout of lexsys-schema     (default: ../lexsys-schema)
 #   PG_DIR         a checkout of lexsys-pg         (default: ../lexsys-pg; read only by a
-#                  program that imports `pg`)
+#                  program that imports `pg`, and `pg.pool` from its `.lex-sys-vcs-pool`)
 #
 # Any other `.ls` file beside the program is built with it: the module `pgen` wrote
 # for `examples/users_pg` is `queries.ls`, next to `users_pg.ls`.
@@ -32,6 +32,10 @@ mkdir -p "$deps" "$(dirname "$out")"
 "$LEX_SYS" vcs fetch --lock "$here/deps/schema.lock" --store "$SCHEMA_DIR/.lex-sys-vcs" -o "$deps" >/dev/null
 if grep -q '^import pg;' "$src" "$(dirname "$src")"/*.ls; then
   "$LEX_SYS" vcs fetch --lock "$here/deps/pg.lock" --store "$PG_DIR/.lex-sys-vcs" -o "$deps" >/dev/null
+fi
+# `pg.pool` is a package of its own; its store requires `pg`'s, which `fetch` finds beside it
+if grep -q '^import pg\.pool;' "$src" "$(dirname "$src")"/*.ls; then
+  "$LEX_SYS" vcs fetch --lock "$here/deps/pool.lock" --store "$PG_DIR/.lex-sys-vcs-pool" -o "$deps" >/dev/null
 fi
 siblings=()
 for f in "$(dirname "$src")"/*.ls; do
