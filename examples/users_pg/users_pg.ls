@@ -5,7 +5,10 @@ edition 5;
 // that a user lives in a table and the service reaches it through the functions `pgen`
 // wrote from `queries.sql`.
 //
-//     users_pg <port> <db host> <db port> <db user> <db name> <db password|->
+//     users_pg <port> <db host> <db port> <db user> <db name> <db password|-> [reuseport]
+//
+// The eighth argument, whatever it is, lets copies share the port (`reuseport`): see docs/benchmarks.md,
+// "Copies of the blocking service".
 //
 // The table is `schema.sql`; the service does not create it. It holds one connection,
 // opened, logged in and given its prepared statements before it listens, and every request
@@ -800,6 +803,16 @@ fn login[&h, &g, &c, &z](heap: &!h Heap, args: &g Args, conn: &!c Conn, rng: &z 
     return bad;
 }
 
+// `tcp_listen`'s flags: 1 (SO_REUSEPORT) if there is an eighth argument, so that copies of this service
+// can share a port and the kernel spreads the connections between them. Each copy has its own database
+// connection, so while one waits for PostgreSQL another can run.
+fn listen_flags[&g](args: &g Args) -> [args] int {
+    if arg_count(args) == 8 {
+        return 1;
+    }
+    return 0;
+}
+
 fn main(world: World) -> [] int {
     let Split { io, ffi, fs, heap, args, net, clock } = split(world);
     release(ffi);
@@ -807,7 +820,7 @@ fn main(world: World) -> [] int {
     var port = 0 - 1;
     var db_port = 0 - 1;
     borrow args as &g in {
-        if arg_count(g) == 7 {
+        if arg_count(g) == 7 || arg_count(g) == 8 {
             port = number_of(arg(g, 1));
             db_port = number_of(arg(g, 3));
         }
@@ -826,7 +839,7 @@ fn main(world: World) -> [] int {
                                 borrow rng as &z in {
                                     if login(h, g, ch, z) == 0 {
                                         status = 3;
-                                        match tcp_listen(nn, port, 1024, 0) {
+                                        match tcp_listen(nn, port, 1024, listen_flags(g)) {
                                             Listening::Ok(l) => {
                                                 var listener = l;
                                                 borrow mut listener as &!lh in {
