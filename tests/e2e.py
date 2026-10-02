@@ -129,6 +129,16 @@ def request(c, method, path, body=None, headers=None):
 
 # ------------------------------------------------------------------------ tests
 class Document(unittest.TestCase):
+    def test_the_served_document_is_the_checked_in_one(self):
+        # `examples/users/openapi.json` is the API's contract as a file: a change to
+        # the declared routes, parameters, bodies or schemas changes this file, so the
+        # change shows in review. Regenerate it with `build/users 8080 & curl -s
+        # localhost:8080/openapi.json > examples/users/openapi.json`.
+        status, _, raw = get("/openapi.json")
+        self.assertEqual(status, 200)
+        with open(os.path.join(ROOT, "examples", "users", "openapi.json"), "rb") as f:
+            self.assertEqual(raw, f.read())
+
     def test_the_document_is_valid_openapi_3_1(self):
         validate_openapi(DOC)
         self.assertEqual(DOC["openapi"], "3.1.0")

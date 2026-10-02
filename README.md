@@ -9,14 +9,16 @@ errors, and an OpenAPI document generated from the same declarations -- on top o
 One thread, a `Poller`, no `Ffi`, no `extern fn`: the compiled server's authority report
 names exactly what it can do, and C is not on the list.
 
-> **Status: one real example built, the framework not extracted.**
+> **Status: the declaration half of the framework is built.**
 > [`examples/users`](examples/users/users.ls) is a CRUD JSON API over `http.server` and
 > `lexsys-schema`, held to its own OpenAPI document by an end-to-end test over real sockets
-> and by Schemathesis, and benchmarked against FastAPI, Go and C
-> ([below](#measured)). What a user writes today is that file: the routes are a table of
-> ids and the dispatch is an `if` chain, which is more ceremony than FastAPI's decorators.
-> Extracting the layer that removes it is what [`docs/design.md`](docs/design.md) plans, and
-> the example is what it will be extracted *from*.
+> and by Schemathesis, and benchmarked against FastAPI, Go and C ([below](#measured)).
+> [`src/web.ls`](src/web.ls) declares each operation once -- its route, parameters, body and
+> responses -- and the router and the OpenAPI document both come from that declaration
+> (the document is checked in as [`examples/users/openapi.json`](examples/users/openapi.json),
+> so a change to the API is a change to a file). Not yet: dispatch -- the handler is still an
+> `if` on the route id and still checks its own path and query parameters -- and middleware
+> ([`docs/design.md`](docs/design.md) §8 says what is next and why).
 
 ## Quick start
 
@@ -66,7 +68,7 @@ below has the rest (`Location`, `204`, `404`, `415`, paging).
 
 ```
 pip install jsonschema openapi-spec-validator schemathesis
-python3 tests/e2e.py            # 26 tests over real sockets, Schemathesis included, ~25 s
+python3 tests/e2e.py            # 27 tests over real sockets, Schemathesis included, ~25 s
 benches/check.sh                # the Go and C comparison servers still do the same work
 ```
 
@@ -149,13 +151,18 @@ let (s7, new_user) = schema.new_object(heap, s6, true);       // true: unknown k
 s = user_fields(heap, s7, new_user, 0 - 1, name, email, age, role, tags);
 ```
 
-The routes are a table, and a request is looked up in it (`routes`, `handle`):
+Each operation is declared once with `web` (`setup`): the route, its parameters, its body and its
+responses. The router answers the id that `handle` tests, and the OpenAPI document is generated from
+the same declaration, so a route cannot be served and undocumented:
 
 ```
-r = route.add(heap, r, "GET",    "/users/:id", 4);
-r = route.add(heap, r, "DELETE", "/users/:id", 5);
+let (a4, op_get) = web.operation(heap, api, "GET", "/users/:id", "getUser");
+api = web.path_param(heap, a4, op_get, "id", path_id);              // path_id: a schema node, 1..
+api = web.respond(heap, api, op_get, 200, "the user", user);
+api = web.respond_problem(heap, api, op_get, 404);
+api = web.respond_problem(heap, api, op_get, 422);
 ...
-let id = route.find(router, http.method(request, table), path, params);
+let id = web.find(api, http.method(request, table), path, params);   // in handle
 if id == 3 { return create(heap, sc, new_user, store, request, table, body, out, keep); }
 ```
 
@@ -181,7 +188,7 @@ while true {
 ## Tests
 
 ```
-python3 tests/e2e.py              # 26 tests; builds first       (pip install jsonschema openapi-spec-validator schemathesis)
+python3 tests/e2e.py              # 27 tests; builds first       (pip install jsonschema openapi-spec-validator schemathesis)
 EXAMPLES=500 python3 tests/e2e.py # more generated requests
 ```
 
@@ -189,7 +196,8 @@ The real binary on a real socket, a real HTTP client, and:
 
 * **the contract:** every response any test sees must be one the served OpenAPI
   document declares, with a body that validates against the schema it declares;
-* **the document itself** validates as OpenAPI 3.1;
+* **the document itself** validates as OpenAPI 3.1, and is byte-for-byte the checked-in
+  `examples/users/openapi.json`;
 * **Schemathesis** generates requests from the document (positive and negative
   cases, stateful scenarios) and checks what comes back: 8,447 cases in the last
   500-example run, none failing;
@@ -197,6 +205,7 @@ The real binary on a real socket, a real HTTP client, and:
   validation edge cases (every error with its pointer, no coercion, `150.0`).
 
 ```
+lex-sys test tests/web_test.ls src/web.ls build/deps/*.ls --std   # `web` unit tests (after a build has fetched build/deps)
 benches/check.sh                  # the Go and C implementations still do the same work (seconds)
 ```
 
@@ -228,10 +237,13 @@ example and one in lex-sys's `std.buffer`, both fixed.
 ## Layout
 
 ```
-examples/users/users.ls   the service: schema, routes, handlers, store, the loop
+src/web.ls                the declaration layer: operations, parameters, bodies, responses -> router + OpenAPI
+examples/users/users.ls   the service: schemas, the declared API, handlers, store, the loop
+examples/users/openapi.json  the contract as a file, checked against what the service serves
 scripts/build.sh          fetch + verify the locked packages, then build
 deps/*.lock               the packages this builds against, pinned by hash
 tests/e2e.py              the end-to-end tests (real binary, real sockets, Schemathesis)
+tests/web_test.ls         unit tests of `web`: documents derived by hand, compared byte for byte
 benches/                  the benchmark: the FastAPI, Go and C implementations of the same
                           API, the load generator, and the checks that they do the same work
 docs/design.md            what the framework layer will be, and what building the example found
@@ -240,10 +252,10 @@ docs/benchmarks.md        the method, the numbers, and how to read them
 
 ## Not yet
 
-The framework layer (declare a route with its schema and get the dispatch, validation and
-documentation from one place); middleware, auth, and anything like FastAPI's dependency
-injection; TLS; streaming bodies; more than one core; `$ref`/`$defs` in the generated schema.
-The design document says which of these are decided and which are open.
+Dispatch and parameter validation by construction (a path or query parameter that fails its
+schema is still a check the handler makes); middleware, auth, and anything like FastAPI's
+dependency injection; TLS; streaming bodies; more than one core; `$ref`/`$defs` in the generated
+JSON Schema. The design document says which of these are decided and which are open.
 
 ## Licence
 

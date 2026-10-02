@@ -35,6 +35,7 @@ import std.route;
 import std.vec;
 import http.server;
 import schema;
+import web;
 
 // The most the store will hold: 100,000 users in 64 MiB. It grows toward these;
 // past them a POST is a 503, not a crash.
@@ -183,63 +184,13 @@ fn user_fields[&h](heap: &!h Heap, s: schema.Schema, obj: int, id: int, name: in
     return t;
 }
 
-// The paths, written out. A complete JSON value, spliced in whole by
-// `json.put_fragment`, which checks it: a typo here stops the service at start-up
-// rather than serving an invalid document.
-fn paths_json() -> [] &static [byte] {
-    return "{\"/health\":{\"get\":{\"operationId\":\"health\",\"responses\":{\"200\":{\"description\":\"alive\",\"content\":{\"application/json\":{\"schema\":{\"type\":\"object\",\"properties\":{\"ok\":{\"type\":\"boolean\"}},\"required\":[\"ok\"],\"additionalProperties\":false}}}}}}},\"/users\":{\"get\":{\"operationId\":\"listUsers\",\"parameters\":[{\"name\":\"limit\",\"in\":\"query\",\"required\":false,\"schema\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100}},{\"name\":\"offset\",\"in\":\"query\",\"required\":false,\"schema\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":99999999999999999}}],\"responses\":{\"200\":{\"description\":\"a page\",\"content\":{\"application/json\":{\"schema\":{\"$ref\":\"#/components/schemas/Page\"}}}},\"422\":{\"$ref\":\"#/components/responses/Problem\"}}},\"post\":{\"operationId\":\"createUser\",\"requestBody\":{\"required\":true,\"content\":{\"application/json\":{\"schema\":{\"$ref\":\"#/components/schemas/NewUser\"}}}},\"responses\":{\"201\":{\"description\":\"created\",\"headers\":{\"Location\":{\"schema\":{\"type\":\"string\"}}},\"content\":{\"application/json\":{\"schema\":{\"$ref\":\"#/components/schemas/User\"}}}},\"400\":{\"$ref\":\"#/components/responses/Problem\"},\"415\":{\"$ref\":\"#/components/responses/Problem\"},\"422\":{\"$ref\":\"#/components/responses/Problem\"},\"503\":{\"$ref\":\"#/components/responses/Problem\"}}}},\"/users/{id}\":{\"parameters\":[{\"name\":\"id\",\"in\":\"path\",\"required\":true,\"schema\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":99999999999999999}}],\"get\":{\"operationId\":\"getUser\",\"responses\":{\"200\":{\"description\":\"the user\",\"content\":{\"application/json\":{\"schema\":{\"$ref\":\"#/components/schemas/User\"}}}},\"404\":{\"$ref\":\"#/components/responses/Problem\"},\"422\":{\"$ref\":\"#/components/responses/Problem\"}}},\"delete\":{\"operationId\":\"deleteUser\",\"responses\":{\"204\":{\"description\":\"deleted\"},\"404\":{\"$ref\":\"#/components/responses/Problem\"},\"422\":{\"$ref\":\"#/components/responses/Problem\"}}}}}";
-}
-
-fn problem_response_json() -> [] &static [byte] {
-    return "{\"Problem\":{\"description\":\"a problem\",\"content\":{\"application/problem+json\":{\"schema\":{\"$ref\":\"#/components/schemas/Problem\"}}}}}";
-}
-
-// One named schema into `components.schemas`: the generated JSON Schema of `node`.
-fn put_schema[&h, &s, &n](heap: &!h Heap, w: json.Writer, sc: &s schema.Schema, name: &n [byte], node: int) -> [heap] json.Writer {
-    var o = json.put_key(heap, w, name);
-    let fragment = schema.json_schema(heap, sc, node);
-    borrow fragment as &fb in {
-        o = json.put_fragment(heap, o, buffer.bytes(fb));
-    }
-    buffer.drop(heap, fragment);
-    return o;
-}
-
-// The OpenAPI document: the paths written out, the schemas generated -- from the
-// same nodes `schema.validate` runs.
-fn openapi[&h, &s](heap: &!h Heap, sc: &s schema.Schema, new_user: int, user: int, page: int, problem: int) -> [heap] buffer.Buffer {
-    var w = json.writer(heap, 8192);
-    w = json.begin_object(heap, w);
-    w = json.put_key(heap, w, "openapi");
-    w = json.put_string(heap, w, "3.1.0");
-    w = json.put_key(heap, w, "info");
-    w = json.begin_object(heap, w);
-    w = json.put_key(heap, w, "title");
-    w = json.put_string(heap, w, "Users API");
-    w = json.put_key(heap, w, "version");
-    w = json.put_string(heap, w, "1.0.0");
-    w = json.end_object(heap, w);
-    w = json.put_key(heap, w, "paths");
-    w = json.put_fragment(heap, w, paths_json());
-    w = json.put_key(heap, w, "components");
-    w = json.begin_object(heap, w);
-    w = json.put_key(heap, w, "responses");
-    w = json.put_fragment(heap, w, problem_response_json());
-    w = json.put_key(heap, w, "schemas");
-    w = json.begin_object(heap, w);
-    w = put_schema(heap, w, sc, "NewUser", new_user);
-    w = put_schema(heap, w, sc, "User", user);
-    w = put_schema(heap, w, sc, "Page", page);
-    w = put_schema(heap, w, sc, "Problem", problem);
-    w = json.end_object(heap, w);
-    w = json.end_object(heap, w);
-    w = json.end_object(heap, w);
-    return json.finish(w);
-}
-
-// Build every schema, answering the `Schema`, the node a POST body is checked
-// against, and the OpenAPI document.
-fn setup[&h](heap: &!h Heap) -> [heap] (schema.Schema, int, buffer.Buffer) {
+// Build every schema, then declare the API over them (`web`): the `Schema`, the node a
+// POST body is checked against, the declared API (its router and what it documents), and
+// the OpenAPI document generated from it.
+//
+// A route's id is the order it is declared in, which is what `handle` tests: health 1,
+// list 2, create 3, get 4, delete 5, the document 6.
+fn setup[&h](heap: &!h Heap) -> [heap] (schema.Schema, int, web.Api, buffer.Buffer) {
     var s = schema.empty(heap);
     let (s1, name) = schema.new_string(heap, s, 1, 64);
     let (s2, email) = schema.new_string(heap, s1, 3, 120);
@@ -279,12 +230,64 @@ fn setup[&h](heap: &!h Heap) -> [heap] (schema.Schema, int, buffer.Buffer) {
     s = schema.add_field(heap, s, problem, "count", count, false);
     s = schema.add_field(heap, s, problem, "errors", errors, false);
 
+    // Nodes that only the documentation needs (the validator never runs them): the
+    // health answer, the paging parameters, and the id in a path. Added last so the
+    // slots of `NewUser`'s fields stay 0..4.
+    let (s19, alive) = schema.new_bool(heap, s);
+    let (s20, health) = schema.new_object(heap, s19, true);
+    s = schema.add_field(heap, s20, health, "ok", alive, true);
+    let (s21, limit) = schema.new_int(heap, s, 1, 100);
+    let (s22, offset) = schema.new_int(heap, s21, 0, 99999999999999999);
+    let (s23, path_id) = schema.new_int(heap, s22, 1, 99999999999999999);
+    s = s23;
+
+    var api = web.empty(heap);
+    let (a1, op_health) = web.operation(heap, api, "GET", "/health", "health");
+    api = web.respond(heap, a1, op_health, 200, "alive", health);
+
+    let (a2, op_list) = web.operation(heap, api, "GET", "/users", "listUsers");
+    api = web.query_param(heap, a2, op_list, "limit", limit, false);
+    api = web.query_param(heap, api, op_list, "offset", offset, false);
+    api = web.respond(heap, api, op_list, 200, "a page", page);
+    api = web.respond_problem(heap, api, op_list, 422);
+
+    let (a3, op_create) = web.operation(heap, api, "POST", "/users", "createUser");
+    api = web.body(heap, a3, op_create, new_user);
+    api = web.respond(heap, api, op_create, 201, "created", user);
+    api = web.response_header(heap, api, op_create, "Location");
+    api = web.respond_problem(heap, api, op_create, 400);
+    api = web.respond_problem(heap, api, op_create, 415);
+    api = web.respond_problem(heap, api, op_create, 422);
+    api = web.respond_problem(heap, api, op_create, 503);
+
+    let (a4, op_get) = web.operation(heap, api, "GET", "/users/:id", "getUser");
+    api = web.path_param(heap, a4, op_get, "id", path_id);
+    api = web.respond(heap, api, op_get, 200, "the user", user);
+    api = web.respond_problem(heap, api, op_get, 404);
+    api = web.respond_problem(heap, api, op_get, 422);
+
+    let (a5, op_delete) = web.operation(heap, api, "DELETE", "/users/:id", "deleteUser");
+    api = web.path_param(heap, a5, op_delete, "id", path_id);
+    api = web.respond_empty(heap, api, op_delete, 204, "deleted");
+    api = web.respond_problem(heap, api, op_delete, 404);
+    api = web.respond_problem(heap, api, op_delete, 422);
+
+    let (a6, op_doc) = web.internal(heap, api, "GET", "/openapi.json");
+    api = a6;
+
+    api = web.component(heap, api, "NewUser", new_user);
+    api = web.component(heap, api, "User", user);
+    api = web.component(heap, api, "Page", page);
+    api = web.component(heap, api, "Problem", problem);
+
     var doc = buffer.empty(heap, 16);
-    borrow s as &sr in {
-        buffer.drop(heap, doc);
-        doc = openapi(heap, sr, new_user, user, page, problem);
+    borrow api as &ar in {
+        borrow s as &sr in {
+            buffer.drop(heap, doc);
+            doc = web.openapi(heap, ar, sr, "Users API", "1.0.0");
+        }
     }
-    return (s, new_user, doc);
+    return (s, new_user, api, doc);
 }
 
 // ---------------------------------------------------------------------
@@ -547,24 +550,13 @@ fn one[&h, &st, &p, &s](heap: &!h Heap, store: &!st Store, path: &s [byte], para
     return server.reply(heap, out, 200, store_get(store, id), keep);
 }
 
-fn routes[&h](heap: &!h Heap) -> [heap] route.Router {
-    var r = route.empty(heap);
-    r = route.add(heap, r, "GET", "/health", 1);
-    r = route.add(heap, r, "GET", "/users", 2);
-    r = route.add(heap, r, "POST", "/users", 3);
-    r = route.add(heap, r, "GET", "/users/:id", 4);
-    r = route.add(heap, r, "DELETE", "/users/:id", 5);
-    r = route.add(heap, r, "GET", "/openapi.json", 6);
-    return r;
-}
-
 // One parsed request in, one response appended to `out`. The store goes in and
 // comes out by value: only a `POST` changes its shape, but the signature cannot
 // say which route that is.
-fn handle[&h, &r, &sc, &d, &q, &t, &p, &b](heap: &!h Heap, router: &r route.Router, sc: &sc schema.Schema, new_user: int, store: Store, doc: &d [byte], request: &q [byte], table: &t [int], params: &!p [int], body: &b [byte], out: buffer.Buffer) -> [heap] (buffer.Buffer, Store) {
+fn handle[&h, &r, &sc, &d, &q, &t, &p, &b](heap: &!h Heap, api: &r web.Api, sc: &sc schema.Schema, new_user: int, store: Store, doc: &d [byte], request: &q [byte], table: &t [int], params: &!p [int], body: &b [byte], out: buffer.Buffer) -> [heap] (buffer.Buffer, Store) {
     let keep = http.keeps_alive(table);
     let path = http.path(request, table);
-    let id = route.find(router, http.method(request, table), path, params);
+    let id = web.find(api, http.method(request, table), path, params);
     if id == 3 {
         return create(heap, sc, new_user, store, request, table, body, out, keep);
     }
@@ -588,7 +580,7 @@ fn handle[&h, &r, &sc, &d, &q, &t, &p, &b](heap: &!h Heap, router: &r route.Rout
         answer = server.reply(heap, answer, 200, doc, keep);
     } else if id == 0 - 2 {
         var extra = buffer.append(heap, buffer.empty(heap, 48), "Allow: ");
-        extra = route.allowed(heap, router, path, params, extra);
+        extra = web.allowed(heap, api, path, params, extra);
         extra = buffer.append(heap, extra, "\r\n");
         borrow extra as &eb in {
             answer = server.failure_with(heap, answer, 405, "method not allowed", keep, buffer.bytes(eb));
@@ -604,17 +596,19 @@ fn handle[&h, &r, &sc, &d, &q, &t, &p, &b](heap: &!h Heap, router: &r route.Rout
 // The loop
 // ---------------------------------------------------------------------
 
-fn run[&h, &r, &k, &l](heap: &!h Heap, router: &r route.Router, clock: &k Clock, listener: &!l Listener) -> [heap, conn_accept, conn_read, conn_write, poll, clock] int {
+fn run[&h, &k, &l](heap: &!h Heap, clock: &k Clock, listener: &!l Listener) -> [heap, conn_accept, conn_read, conn_write, poll, clock] int {
     match poller_new() {
         Polling::Ok(p) => {
             var srv = server.open(heap, p, listener, 16384, 0, 9);
+            var store = store_new(heap);
+            let (sc, new_user, api, doc) = setup(heap);
             var widest = 1;
-            if route.most_params(router) > 1 {
-                widest = route.most_params(router);
+            borrow api as &ar in {
+                if web.most_params(ar) > 1 {
+                    widest = web.most_params(ar);
+                }
             }
             let params = box_slice(heap, 2 * widest, 0);
-            var store = store_new(heap);
-            let (sc, new_user, doc) = setup(heap);
             var out = buffer.empty(heap, 4096);
             while true {
                 srv = server.wait(heap, srv, clock, listener, 1000);
@@ -632,11 +626,13 @@ fn run[&h, &r, &k, &l](heap: &!h Heap, router: &r route.Router, clock: &k Clock,
                         }
                         borrow srv as &sr in {
                             borrow mut params as &!pw in {
-                                borrow sc as &scr in {
-                                    borrow doc as &dr in {
-                                        let (answer, back) = handle(heap, router, scr, new_user, store, buffer.bytes(dr), server.head(sr), server.parsed(sr), contents(pw), server.body(sr), out);
-                                        out = answer;
-                                        store = back;
+                                borrow api as &ar in {
+                                    borrow sc as &scr in {
+                                        borrow doc as &dr in {
+                                            let (answer, back) = handle(heap, ar, scr, new_user, store, buffer.bytes(dr), server.head(sr), server.parsed(sr), contents(pw), server.body(sr), out);
+                                            out = answer;
+                                            store = back;
+                                        }
                                     }
                                 }
                             }
@@ -652,6 +648,7 @@ fn run[&h, &r, &k, &l](heap: &!h Heap, router: &r route.Router, clock: &k Clock,
             server.close(heap, srv);
             buffer.drop(heap, out);
             buffer.drop(heap, doc);
+            web.drop(heap, api);
             schema.drop(heap, sc);
             store_drop(heap, store);
             unbox_slice(heap, params);
@@ -683,7 +680,6 @@ fn main(world: World) -> [] int {
                     borrow mut listener as &!lh in {
                         listener_nonblocking(lh);
                         borrow mut heap as &!h in {
-                            let router = routes(h);
                             borrow mut io as &!i in {
                                 var line = buffer.append(h, buffer.empty(h, 64), "listening on ");
                                 line = buffer.push_nat(h, line, port);
@@ -693,12 +689,9 @@ fn main(world: World) -> [] int {
                                 }
                                 buffer.drop(h, line);
                             }
-                            borrow router as &r in {
-                                borrow clock as &c in {
-                                    status = run(h, r, c, lh);
-                                }
+                            borrow clock as &c in {
+                                status = run(h, c, lh);
                             }
-                            route.drop(h, router);
                         }
                     }
                     listener_close(listener);
