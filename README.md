@@ -136,6 +136,28 @@ HTTP/1.1 422 Unprocessable Content
 Storage is in memory, up to 100,000 users or 64 MiB (past that a `POST` is a 503); a delete
 leaves a hole, ids are not reused.
 
+### The same API on PostgreSQL
+
+[`examples/users_pg`](examples/users_pg/users_pg.ls) is this service with a table behind it: the same routes,
+the same schema nodes, the same OpenAPI document (plus a `pattern` on `name` and `email`, which refuse
+U+0000 because PostgreSQL text cannot hold it) and the same answers, byte for byte, and the end-to-end suite,
+Schemathesis included, runs against it unchanged (`USERS_PG=1 python3 tests/e2e.py`). It reaches the
+database through functions that `pgen` (in [`lexsys-pg`](https://github.com/alpibrusl/lexsys-pg)) wrote from
+[`queries.sql`](examples/users_pg/queries.sql) by asking the server what each statement's parameters and
+columns are, and through `lexsys-pg`'s driver, so `lex-sys authority` on it names the network, one random-file
+read for the login, and nothing foreign.
+
+```
+createdb users_pg && psql users_pg -f examples/users_pg/schema.sql
+scripts/build.sh examples/users_pg/users_pg.ls build/users_pg
+build/users_pg 8080 127.0.0.1 5432 postgres users_pg -         # <port> <db host> <db port> <db user> <db> <password|->
+```
+
+It holds one connection and each request that needs the database blocks the loop for a round trip. Measured
+([`docs/benchmarks.md`](docs/benchmarks.md#on-postgresql)): a read is 10,214 requests a second, 81% of what
+PostgreSQL itself answers over the same protocol and 3.5x lean FastAPI + asyncpg (9.8x FastAPI +
+SQLAlchemy); a write is bound by `fsync` at about 2,700 a second, because one connection cannot group commits.
+
 ## How it is written
 
 The shape is declared once, as data (`setup` in [`users.ls`](examples/users/users.ls)); the

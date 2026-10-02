@@ -4,6 +4,9 @@
     python3 tests/e2e.py                       # builds with scripts/build.sh
     BIN=build/users python3 tests/e2e.py       # an already built binary
     LEX_SYS=/path/to/lex-sys python3 tests/e2e.py
+    USERS_PG=1 python3 tests/e2e.py            # examples/users_pg: the same tests, PostgreSQL as the store
+                                               # (PGHOST PGPORT PGUSER PGDATABASE [PGPASSWORD] name a database
+                                               # the user may drop and create tables in)
 
 The service is held to its own OpenAPI document: every response any test sees is
 checked against the schema that document declares for that operation and status,
@@ -33,6 +36,8 @@ BIN = os.environ.get("BIN")
 PROC = None
 PORT = None
 DOC = None
+USERS_PG = bool(os.environ.get("USERS_PG"))
+EXAMPLE = "users_pg" if USERS_PG else "users"
 
 
 def free_port():
@@ -43,12 +48,21 @@ def free_port():
 
 def setUpModule():
     global PROC, PORT, DOC, BIN
+    example = EXAMPLE
     if not BIN:
-        BIN = os.path.join(tempfile.mkdtemp(prefix="users-"), "users")
+        BIN = os.path.join(tempfile.mkdtemp(prefix="users-"), example)
         subprocess.run([os.path.join(ROOT, "scripts", "build.sh"),
-                        os.path.join(ROOT, "examples", "users", "users.ls"), BIN], check=True)
+                        os.path.join(ROOT, "examples", example, example + ".ls"), BIN], check=True)
     PORT = free_port()
-    PROC = subprocess.Popen([BIN, str(PORT)], stderr=subprocess.PIPE)
+    args = [BIN, str(PORT)]
+    if USERS_PG:
+        env = dict(os.environ)
+        # a fresh table: ids start at 1, as they do in a fresh in-memory store
+        subprocess.run(["psql", "-q", "-v", "ON_ERROR_STOP=1", "-f", os.path.join(ROOT, "examples", "users_pg", "schema.sql")],
+                       env=env, check=True, capture_output=True)
+        args += [env.get("PGHOST", "127.0.0.1"), env.get("PGPORT", "5432"), env.get("PGUSER", "postgres"),
+                 env.get("PGDATABASE", "users_pg"), env.get("PGPASSWORD", "-")]
+    PROC = subprocess.Popen(args, stderr=subprocess.PIPE)
     line = PROC.stderr.readline().decode().strip()
     assert line == "listening on %d" % PORT, line
     DOC = json.loads(get("/openapi.json")[2])
@@ -130,13 +144,13 @@ def request(c, method, path, body=None, headers=None):
 # ------------------------------------------------------------------------ tests
 class Document(unittest.TestCase):
     def test_the_served_document_is_the_checked_in_one(self):
-        # `examples/users/openapi.json` is the API's contract as a file: a change to
-        # the declared routes, parameters, bodies or schemas changes this file, so the
-        # change shows in review. Regenerate it with `build/users 8080 & curl -s
-        # localhost:8080/openapi.json > examples/users/openapi.json`.
+        # `examples/users/openapi.json` (`users_pg/` for the PostgreSQL service) is the
+        # API's contract as a file: a change to the declared routes, parameters, bodies
+        # or schemas changes this file, so the change shows in review. Regenerate it with
+        # `build/users 8080 & curl -s localhost:8080/openapi.json > examples/users/openapi.json`.
         status, _, raw = get("/openapi.json")
         self.assertEqual(status, 200)
-        with open(os.path.join(ROOT, "examples", "users", "openapi.json"), "rb") as f:
+        with open(os.path.join(ROOT, "examples", EXAMPLE, "openapi.json"), "rb") as f:
             self.assertEqual(raw, f.read())
 
     def test_the_document_is_valid_openapi_3_1(self):
@@ -236,6 +250,38 @@ class Users(unittest.TestCase):
         before = request(c, "GET", "/users?limit=1")[2]["total"]
         request(c, "DELETE", "/users/%d" % a)
         self.assertEqual(request(c, "GET", "/users?limit=1")[2]["total"], before - 1)
+
+
+@unittest.skipUnless(USERS_PG, "the in-memory store takes any string; PostgreSQL's text cannot hold U+0000")
+class Database(unittest.TestCase):
+    def test_u0000_is_refused_by_the_schema_where_the_database_cannot_hold_it(self):
+        # Found by Schemathesis: JSON can say "\u0000", PostgreSQL `text` cannot store it. Answering 503
+        # was wrong, and so was a 422 the document did not promise: the schema refuses it, and the
+        # document says so (`pattern`), so a request the contract accepts is one the store can keep.
+        c = conn()
+        before = json.loads(call(c, "GET", "/users")[2])["total"]
+        for field, body in (("/name", '{"name":"a\\u0000b"}'), ("/email", '{"name":"x","email":"a\\u0000bc"}')):
+            status, resp, raw = call(c, "POST", "/users", body)
+            self.assertEqual(status, 422, raw)
+            self.assertEqual(resp.getheader("Content-Type"), "application/problem+json")
+            errors = json.loads(raw)["errors"]
+            self.assertEqual([(e["pointer"], e["code"]) for e in errors], [(field, "nul")])
+        self.assertEqual(json.loads(call(c, "GET", "/users")[2])["total"], before)
+        # the document states it
+        props = DOC["components"]["schemas"]["NewUser"]["properties"]
+        for field in ("name", "email"):
+            self.assertEqual(props[field]["pattern"], "^[^\\u0000]*$")
+        self.assertNotIn("pattern", props["role"])
+        # a tag is stored in a `json` column, which keeps it: it round-trips
+        status, _, raw = call(c, "POST", "/users", '{"name":"t","tags":["a\\u0000b"]}')
+        self.assertEqual(status, 201, raw)
+        uid = json.loads(raw)["id"]
+        got = json.loads(call(c, "GET", "/users/%d" % uid)[2])
+        self.assertEqual(got["tags"], ["a\x00b"])
+        # and `\\u0000` -- a backslash and four characters, not a NUL -- is just text
+        status, _, raw = call(c, "POST", "/users", '{"name":"back\\\\u0000"}')
+        self.assertEqual(status, 201, raw)
+        self.assertEqual(json.loads(raw)["name"], "back\\u0000")
 
 
 class Frames(unittest.TestCase):

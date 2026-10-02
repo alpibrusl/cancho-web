@@ -10,11 +10,17 @@
 #   LEX_SYS        the lex-sys compiler binary     (default: lex-sys on PATH)
 #   LEX_SYS_DIR    a checkout of lex-sys           (default: ../lex-sys)
 #   SCHEMA_DIR     a checkout of lexsys-schema     (default: ../lexsys-schema)
+#   PG_DIR         a checkout of lexsys-pg         (default: ../lexsys-pg; read only by a
+#                  program that imports `pg`)
+#
+# Any other `.ls` file beside the program is built with it: the module `pgen` wrote
+# for `examples/users_pg` is `queries.ls`, next to `users_pg.ls`.
 set -euo pipefail
 here=$(cd "$(dirname "$0")/.." && pwd)
 LEX_SYS=${LEX_SYS:-lex-sys}
 LEX_SYS_DIR=${LEX_SYS_DIR:-$here/../lex-sys}
 SCHEMA_DIR=${SCHEMA_DIR:-$here/../lexsys-schema}
+PG_DIR=${PG_DIR:-$here/../lexsys-pg}
 src=$1
 out=$2
 deps="$here/build/deps"
@@ -24,4 +30,11 @@ mkdir -p "$deps" "$(dirname "$out")"
 # two packages that share a dependency write one file, not two.
 "$LEX_SYS" vcs fetch --lock "$here/deps/http-server.lock" --store "$LEX_SYS_DIR/packages/http-server/.lex-sys-vcs" -o "$deps" >/dev/null
 "$LEX_SYS" vcs fetch --lock "$here/deps/schema.lock" --store "$SCHEMA_DIR/.lex-sys-vcs" -o "$deps" >/dev/null
-"$LEX_SYS" build --std "$src" "$here"/src/*.ls "$deps"/*.ls -o "$out"
+if grep -q '^import pg;' "$src" "$(dirname "$src")"/*.ls; then
+  "$LEX_SYS" vcs fetch --lock "$here/deps/pg.lock" --store "$PG_DIR/.lex-sys-vcs" -o "$deps" >/dev/null
+fi
+siblings=()
+for f in "$(dirname "$src")"/*.ls; do
+  [ "$(cd "$(dirname "$f")" && pwd)/$(basename "$f")" = "$(cd "$(dirname "$src")" && pwd)/$(basename "$src")" ] || siblings+=("$f")
+done
+"$LEX_SYS" build --std "$src" ${siblings[@]+"${siblings[@]}"} "$here"/src/*.ls "$deps"/*.ls -o "$out"

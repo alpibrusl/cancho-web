@@ -193,3 +193,83 @@ a second core for lex-sys (`reuseport` copies); TLS; a real handler's work; resi
 and start-up time. The Go and C servers leave out `/openapi.json`, and the C server also
 chunked request bodies, and neither reads `150.0` as an integer as lex-sys does -- none of it
 is on a benchmarked path.
+
+## On PostgreSQL
+
+`examples/users_pg` is the same API with PostgreSQL as its store (`lexsys-pg`'s driver, queries written
+by `pgen` from `examples/users_pg/queries.sql`). It is compared with the same API in FastAPI twice,
+because "FastAPI with a database" is not one number either:
+
+| | |
+|---|---|
+| **lex-sys `users_pg`** | one connection, opened and logged in before it listens; every request that needs the database makes a **blocking** round trip on it (`http.server` is one loop, so the loop waits) |
+| **FastAPI + SQLAlchemy 2 (async) + asyncpg** | what most FastAPI code with a database looks like: a session per request from a pool of 10, the ORM, a `response_model` |
+| **FastAPI + asyncpg, lean** | a pool of 10 asyncpg connections, the same SQL as `queries.sql`, answers built without a model |
+
+The work is held equal before anything is timed: `equivalent.py` sends all three the same sixteen
+requests, each against its own fresh database, and the run stops unless statuses and successful bodies
+agree. (`name` and `email` refuse U+0000 in all three: PostgreSQL text cannot hold it; see
+`lexsys-schema`'s design.md §13.) The server under test is on core 0, **PostgreSQL on core 1**, the load
+generator on cores 2 and 3, so the three do not share a core. Everything else is as above: 5 seconds of
+load, median of 3, "create" a fixed 20,000 requests against a fresh table (it adds state).
+`benches/run_pg.sh` reproduces it. PostgreSQL 16, default settings (`fsync` on), on the same VM.
+
+### Results
+
+Requests a second:
+
+| | GET one user | GET a page of 20 | POST, invalid (422) | POST, create |
+|---|---:|---:|---:|---:|
+| **lex-sys `users_pg`** | **10,214** | **3,916** | **93,724** | **2,676** |
+| FastAPI + SQLAlchemy + asyncpg | 1,040 | 572 | 3,273 | 809 |
+| FastAPI + asyncpg, lean | 2,953 | 1,952 | 3,360 | 2,375 |
+
+Latency of `GET one user` (32 requests in flight): lex-sys p50 2.3 ms, p99 5.0 ms; lean FastAPI p50 8.1 ms,
+p99 25.9 ms; FastAPI + SQLAlchemy p50 21.8 ms, p99 58.2 ms.
+
+And what PostgreSQL does alone on its core (`pgbench`, libpq, 16 clients, the same row lookup and the same
+insert; no HTTP, no framework), transactions a second:
+
+| protocol | get one row | insert |
+|---|---:|---:|
+| simple query | 15,012 | 8,975 |
+| extended, parse every time (what `pg.extended` sends) | 12,577 | 8,304 |
+| extended, prepared once | 26,787 | 12,159 |
+
+### What it says
+
+* **A read is PostgreSQL-bound, and lex-sys is close to the bound.** 10,214 requests a second is 81% of the
+  12,577 that PostgreSQL itself answers over the same protocol, with the HTTP server, the JSON and the
+  validation on top. Subtracting the 7.8 microseconds an in-memory read costs (129,000 a second, above) leaves
+  **about 90 microseconds of loop time for one blocking round trip** to a PostgreSQL on its own core -- the
+  low end of the 100-300 microseconds `lexsys-pg`'s design.md estimated before anything was measured.
+  FastAPI's lean variant saturates its core (91% in `top` under this load; 2,953 a second, 3.5x slower) and the
+  SQLAlchemy one is slower still (9.8x). The comparison with FastAPI is therefore mostly a comparison of
+  what each spends *around* the query, and that is where the 3-10x is.
+* **The headroom is in the driver, not the language.** `pg.extended` sends Parse every time. PostgreSQL does
+  2.1x as many one-row lookups a second when the statement is prepared once (26,787 against 12,577), and
+  asyncpg, and so both FastAPI variants, already do that. So this service pays twice the database work per query
+  that its competitors do, and wins. Prepare-once is the first thing to build.
+* **A write is not CPU-bound: it waits for `fsync`.** One connection makes one commit at a time: 2,676 creates
+  a second is about **370 microseconds each**, which is the cost of a durable commit on this VM's disk, with
+  the loop blocked the whole time (so a read behind a write waits too). `pgbench`'s 16 clients get 8,304 inserts
+  a second because PostgreSQL commits several of them per `fsync` (group commit); one connection never can.
+  Lean FastAPI has ten connections and reaches 2,375 a second, where Python, not the database, is the limit
+  (it was at its core's limit on reads; not separately measured here for writes). A service
+  with a real write workload wants a **pool** and a connection that does not block the loop -- the
+  non-blocking-connection slice of `lexsys-pg` (design.md §5) -- and this is the number that says so.
+* **A page is two round trips** (a count and a page of 20), 3,916 a second against 1,952 lean: 2.0x, with the
+  same 2.1x of prepare-once to come. Not compared with a floor: `pgbench` was only asked for a lookup and an insert.
+* **A rejected body does not touch the database** (93,724 against 3,273-3,360: 28x), which is the in-memory
+  ratio again and a check that adding a database did not slow the path that never reaches it.
+
+### What is not measured, and what would change it
+
+* **One machine, one disk.** `fsync` latency is this VM's; the create column in particular will differ on other
+  storage, and `synchronous_commit=off` would change it (and what it means). Repeats differ by about 5%, create by
+  more.
+* **A PostgreSQL on its own core.** With it sharing the server's core, a blocking client and an asynchronous one
+  would both slow down, and not by the same amount.
+* **Pool sizes** other than 10 for FastAPI, and a lex-sys service with more than one connection (which it cannot
+  have until the connection stops blocking the loop).
+* **Go, Rust and Node** with a database; and the cost of TLS to PostgreSQL, which `lexsys-pg` cannot do yet.
