@@ -38,6 +38,8 @@ PORT = None
 DOC = None
 DB_ARGS = []
 USERS_PG = bool(os.environ.get("USERS_PG"))
+# USERS_PG_POOL=n: the whole suite against the non-blocking service with n database connections
+POOL = int(os.environ.get("USERS_PG_POOL", "0"))
 EXAMPLE = "users_pg" if USERS_PG else "users"
 
 
@@ -64,6 +66,8 @@ def setUpModule():
         DB_ARGS[:] = [env.get("PGHOST", "127.0.0.1"), env.get("PGPORT", "5432"), env.get("PGUSER", "postgres"),
                       env.get("PGDATABASE", "users_pg"), env.get("PGPASSWORD", "-")]
         args += DB_ARGS
+        if POOL:
+            args += ["-", str(POOL)]
     PROC = subprocess.Popen(args, stderr=subprocess.PIPE)
     line = PROC.stderr.readline().decode().strip()
     assert line == "listening on %d" % PORT, line
@@ -322,6 +326,242 @@ class Copies(unittest.TestCase):
                 p.kill()
                 p.wait()
                 p.stderr.close()
+
+
+@unittest.skipUnless(USERS_PG, "only the PostgreSQL service has a database to wait for")
+class NonBlocking(unittest.TestCase):
+    """The service with a pool of database connections (`users_pg <port> <host> <port> <user> <db> <password> - <n>`):
+    a request that waits for PostgreSQL does not stop the others, and what it answers is what the blocking
+    service answers."""
+
+    LANES = 2
+
+    @classmethod
+    def setUpClass(cls):
+        cls.procs = []
+        cls.pooled = cls.spawn(cls, ["-", str(cls.LANES)])
+        cls.blocking = cls.spawn(cls, [])
+
+    @classmethod
+    def tearDownClass(cls):
+        for p in cls.procs:
+            p.kill()
+            p.wait()
+            p.stderr.close()
+        # the tests after these expect the table as they found it: empty, ids from 1
+        subprocess.run(["psql", "-q", "-c", "truncate users restart identity"], env=dict(os.environ, PGDATABASE=DB_ARGS[3]),
+                       capture_output=True)
+
+    def spawn(self, extra, database=None):
+        port = free_port()
+        args = list(DB_ARGS)
+        if database:
+            args[3] = database
+        p = subprocess.Popen([BIN, str(port), *args, *extra], stderr=subprocess.PIPE)
+        self.procs.append(p)
+        assert p.stderr.readline().decode().strip() == "listening on %d" % port
+        return port
+
+    @staticmethod
+    def sql(text):
+        return subprocess.run(["psql", "-q", "-At", "-c", text], capture_output=True, text=True,
+                              env=dict(os.environ, PGDATABASE=DB_ARGS[3]))
+
+    def fresh_table(self):
+        self.assertEqual(self.sql("truncate users restart identity").returncode, 0)
+
+    def request(self, port, method, path, body=None, headers=None):
+        c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        try:
+            h = dict(headers or {})
+            if body is not None:
+                h.setdefault("Content-Type", "application/json")
+            c.request(method, path, body=body, headers=h)
+            r = c.getresponse()
+            return r.status, sorted(r.getheaders()), r.read()
+        finally:
+            c.close()
+
+    def test_a_request_waiting_for_the_database_does_not_stop_the_others(self):
+        import threading, time
+        self.fresh_table()
+        hold = 1.0
+        locker = subprocess.Popen(["psql", "-q", "-c",
+                                   "begin; lock table users in access exclusive mode; select pg_sleep(%s); commit;" % hold],
+                                  stdout=subprocess.DEVNULL, env=dict(os.environ, PGDATABASE=DB_ARGS[3]))
+        try:
+            time.sleep(0.3)
+            waited = {}
+
+            def slow():
+                t = time.perf_counter()
+                waited["status"] = self.request(self.pooled, "GET", "/users/1")[0]
+                waited["ms"] = (time.perf_counter() - t) * 1000
+            th = threading.Thread(target=slow)
+            th.start()
+            time.sleep(0.1)
+            c = http.client.HTTPConnection("127.0.0.1", self.pooled, timeout=10)
+            lat = []
+            for _ in range(100):
+                t = time.perf_counter()
+                c.request("GET", "/health")
+                r = c.getresponse()
+                r.read()
+                self.assertEqual(r.status, 200)
+                lat.append((time.perf_counter() - t) * 1000)
+            c.close()
+            th.join()
+        finally:
+            locker.wait()
+        # the query really was waiting (the lock is held for most of a second more), and /health was not
+        self.assertGreater(waited["ms"], 400, waited)
+        self.assertEqual(waited["status"], 404)
+        self.assertLess(max(lat), 5.0, sorted(lat)[-5:])
+
+    def test_a_blocking_service_does_stop_the_others(self):
+        # the control for the test above: the same request, the same lock, the other service
+        import threading, time
+        self.fresh_table()
+        locker = subprocess.Popen(["psql", "-q", "-c",
+                                   "begin; lock table users in access exclusive mode; select pg_sleep(1.0); commit;"],
+                                  stdout=subprocess.DEVNULL, env=dict(os.environ, PGDATABASE=DB_ARGS[3]))
+        try:
+            time.sleep(0.3)
+            th = threading.Thread(target=lambda: self.request(self.blocking, "GET", "/users/1"))
+            th.start()
+            time.sleep(0.1)
+            t = time.perf_counter()
+            self.assertEqual(self.request(self.blocking, "GET", "/health")[0], 200)
+            stalled = (time.perf_counter() - t) * 1000
+            th.join()
+        finally:
+            locker.wait()
+        self.assertGreater(stalled, 300, stalled)
+
+    SEQUENCE = [
+        ("GET", "/health", None, None),
+        ("GET", "/users", None, None),
+        ("POST", "/users", '{"name":"Ada Lovelace","email":"ada@example.org","age":36,"role":"admin","tags":["math","code"]}', None),
+        ("POST", "/users", '{"name":"Bo"}', None),
+        ("POST", "/users", '{"name":"Cy","tags":[]}', None),
+        ("POST", "/users", '{"name":""}', None),
+        ("POST", "/users", '{"name":"x"', None),
+        ("POST", "/users", '{"name":"x"}', {"Content-Type": "text/plain"}),
+        ("GET", "/users/1", None, None),
+        ("GET", "/users/2", None, None),
+        ("GET", "/users/99", None, None),
+        ("GET", "/users/0", None, None),
+        ("GET", "/users/abc", None, None),
+        ("GET", "/users?limit=2", None, None),
+        ("GET", "/users?limit=2&offset=1", None, None),
+        ("GET", "/users?limit=0", None, None),
+        ("GET", "/users?offset=-1", None, None),
+        ("GET", "/users?nope=1", None, None),
+        ("DELETE", "/users/2", None, None),
+        ("DELETE", "/users/2", None, None),
+        ("GET", "/users", None, None),
+        ("PUT", "/users/1", None, None),
+        ("GET", "/nothing", None, None),
+        ("GET", "/openapi.json", None, None),
+    ]
+
+    def test_the_same_requests_get_the_same_answers_as_from_the_blocking_service(self):
+        answers = {}
+        for name, port in (("blocking", self.blocking), ("pooled", self.pooled)):
+            self.fresh_table()
+            answers[name] = [self.request(port, m, path, body, headers) for m, path, body, headers in self.SEQUENCE]
+        self.assertEqual(len(answers["pooled"]), len(self.SEQUENCE))
+        for (m, path, _, _), a, b in zip(self.SEQUENCE, answers["blocking"], answers["pooled"]):
+            self.assertEqual(a, b, (m, path))
+
+    def test_many_clients_at_once_each_get_their_own_answers(self):
+        import threading
+        self.fresh_table()
+        failures = []
+
+        def client(i):
+            try:
+                c = http.client.HTTPConnection("127.0.0.1", self.pooled, timeout=20)
+                for j in range(15):
+                    name = "user-%d-%d" % (i, j)
+                    c.request("POST", "/users", body=json.dumps({"name": name}), headers={"Content-Type": "application/json"})
+                    r = c.getresponse()
+                    made = json.loads(r.read())
+                    if r.status != 201 or made["name"] != name:
+                        failures.append(("create", i, j, r.status, made))
+                        return
+                    c.request("GET", "/users/%d" % made["id"])
+                    r = c.getresponse()
+                    got = json.loads(r.read())
+                    if r.status != 200 or got != made:
+                        failures.append(("read", i, j, r.status, got, made))
+                        return
+                    c.request("DELETE", "/users/%d" % made["id"])
+                    r = c.getresponse()
+                    r.read()
+                    if r.status != 204:
+                        failures.append(("delete", i, j, r.status))
+                        return
+                c.close()
+            except Exception as e:
+                failures.append((i, repr(e)))
+        threads = [threading.Thread(target=client, args=(i,)) for i in range(48)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(failures, [])
+        self.assertEqual(json.loads(self.request(self.pooled, "GET", "/users")[2])["total"], 0)
+
+    def test_pipelined_requests_on_one_connection_are_answered_in_order(self):
+        self.fresh_table()
+        import socket
+        s = socket.create_connection(("127.0.0.1", self.pooled), timeout=10)
+        reqs = b"".join(b"GET /users/%d HTTP/1.1\r\nHost: t\r\n\r\nGET /health HTTP/1.1\r\nHost: t\r\n\r\n" % i for i in range(1, 9))
+        s.sendall(reqs)
+        got = b""
+        while got.count(b"HTTP/1.1 ") < 16:
+            chunk = s.recv(65536)
+            if not chunk:
+                break
+            got += chunk
+        s.close()
+        import re
+        statuses = re.findall(rb"HTTP/1\.1 (\d{3}) ", got)       # a status line follows the previous body directly
+        self.assertEqual(statuses, [b"404", b"200"] * 8)
+
+    def test_the_database_going_away_answers_every_waiting_request_503_and_the_rest_still_works(self):
+        import threading, time
+        # a database of its own, so that ending its connections ends nobody else's
+        scratch = DB_ARGS[3] + "_gone"
+        env = dict(os.environ, PGDATABASE="postgres")
+        subprocess.run(["psql", "-q", "-c", "drop database if exists %s" % scratch, "-c", "create database %s" % scratch],
+                       env=env, check=True, capture_output=True)
+        subprocess.run(["psql", "-q", "-v", "ON_ERROR_STOP=1", "-f", os.path.join(ROOT, "examples", "users_pg", "schema.sql")],
+                       env=dict(os.environ, PGDATABASE=scratch), check=True, capture_output=True)
+        port = self.spawn(["-", "2"], scratch)                           # a service of its own: it is going to lose its connections
+        locker = subprocess.Popen(["psql", "-q", "-c",
+                                   "begin; lock table users in access exclusive mode; select pg_sleep(2.5); commit;"],
+                                  stdout=subprocess.DEVNULL, env=dict(os.environ, PGDATABASE=scratch))
+        results = []
+        try:
+            time.sleep(0.3)
+            threads = [threading.Thread(target=lambda: results.append(self.request(port, "GET", "/users/1")[0])) for _ in range(6)]
+            for t in threads:
+                t.start()
+            time.sleep(0.5)
+            # every backend of that database but our own and the lock holder's goes away
+            subprocess.run(["psql", "-q", "-At", "-c", "select count(pg_terminate_backend(pid)) from pg_stat_activity "
+                            "where datname = '%s' and pid <> pg_backend_pid() and query not like '%%pg_sleep%%'" % scratch],
+                           env=env, check=True, capture_output=True)
+            for t in threads:
+                t.join()
+            self.assertEqual(results, [503] * 6, results)               # none lost, none answered twice, none left waiting
+            self.assertEqual(self.request(port, "GET", "/health")[0], 200)       # what needs no database still works
+            self.assertEqual(self.request(port, "GET", "/users/1")[0], 503)      # and what does says so (no reconnecting yet)
+        finally:
+            locker.wait()
+            subprocess.run(["psql", "-q", "-c", "drop database if exists %s with (force)" % scratch], env=env, capture_output=True)
 
 
 class Frames(unittest.TestCase):

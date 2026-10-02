@@ -30,6 +30,7 @@ import http.server;
 import schema;
 import web;
 import pg;
+import pg.pool;
 import queries;
 
 fn default_limit() -> [] int {
@@ -252,43 +253,6 @@ fn put_text[&h, &b, &t](heap: &!h Heap, w: json.Writer, body: &b [byte], tape: &
     return o;
 }
 
-// The user as it is stored and answered: `id` first, then whichever of the
-// fields the (validated) request had, as the canonical compact JSON -- not the
-// request's own text, so duplicate keys and odd spacing do not survive into
-// what is stored.
-fn render_user[&h, &b, &t, &u](heap: &!h Heap, id: int, body: &b [byte], tape: &t [int], slots: &u [int]) -> [heap] buffer.Buffer {
-    var w = json.writer(heap, 128);
-    w = json.begin_object(heap, w);
-    w = json.put_key(heap, w, "id");
-    w = json.put_int(heap, w, id);
-    w = json.put_key(heap, w, "name");
-    w = put_text(heap, w, body, tape, slots[slot_name()]);
-    if slots[slot_email()] >= 0 {
-        w = json.put_key(heap, w, "email");
-        w = put_text(heap, w, body, tape, slots[slot_email()]);
-    }
-    if slots[slot_age()] >= 0 {
-        w = json.put_key(heap, w, "age");
-        w = json.put_int(heap, w, schema.to_int(body, tape, slots[slot_age()]));
-    }
-    if slots[slot_role()] >= 0 {
-        w = json.put_key(heap, w, "role");
-        w = put_text(heap, w, body, tape, slots[slot_role()]);
-    }
-    if slots[slot_tags()] >= 0 {
-        w = json.put_key(heap, w, "tags");
-        w = json.begin_array(heap, w);
-        var j = 0;
-        while j < json.count(tape, slots[slot_tags()]) {
-            w = put_text(heap, w, body, tape, json.at(tape, slots[slot_tags()], j));
-            j = j + 1;
-        }
-        w = json.end_array(heap, w);
-    }
-    w = json.end_object(heap, w);
-    return json.finish(w);
-}
-
 // `application/json` at the front of a `Content-Type`, parameters allowed.
 fn is_json_type[&c](value: &c [byte]) -> [] bool {
     let want = "application/json";
@@ -404,8 +368,8 @@ fn tags_json[&h, &b, &t](heap: &!h Heap, body: &b [byte], tape: &t [int], node: 
     return json.finish(w);
 }
 
-// `INSERT` the validated request: the fields it left out are NULL. Answers the reply and a status.
-fn insert_user[&h, &c, &b, &t, &u](heap: &!h Heap, conn: &!c Conn, body: &b [byte], tape: &t [int], slots: &u [int]) -> [heap, conn_read, conn_write] (buffer.Buffer, int) {
+// `INSERT` the validated request, as the bytes to send: the fields it left out are NULL.
+fn insert_user_start[&h, &b, &t, &u](heap: &!h Heap, body: &b [byte], tape: &t [int], slots: &u [int]) -> [heap] buffer.Buffer {
     let name = decoded(heap, body, tape, slots[slot_name()]);
     var email = buffer.empty(heap, 1);
     if slots[slot_email()] >= 0 {
@@ -426,16 +390,13 @@ fn insert_user[&h, &c, &b, &t, &u](heap: &!h Heap, conn: &!c Conn, body: &b [byt
     if slots[slot_age()] >= 0 {
         age = schema.to_int(body, tape, slots[slot_age()]);
     }
-    var reply = buffer.empty(heap, 1);
-    var status = 0;
+    var request = buffer.empty(heap, 1);
     borrow name as &nr in {
         borrow email as &er in {
             borrow role as &rr in {
                 borrow tags as &tr in {
-                    let (r, s) = queries.add_user(heap, conn, buffer.bytes(nr), buffer.bytes(er), slots[slot_email()] >= 0, age, slots[slot_age()] >= 0, buffer.bytes(rr), slots[slot_role()] >= 0, buffer.bytes(tr), slots[slot_tags()] >= 0);
-                    buffer.drop(heap, reply);
-                    reply = r;
-                    status = s;
+                    buffer.drop(heap, request);
+                    request = queries.add_user_start(heap, buffer.bytes(nr), buffer.bytes(er), slots[slot_email()] >= 0, age, slots[slot_age()] >= 0, buffer.bytes(rr), slots[slot_role()] >= 0, buffer.bytes(tr), slots[slot_tags()] >= 0);
                 }
             }
         }
@@ -444,16 +405,68 @@ fn insert_user[&h, &c, &b, &t, &u](heap: &!h Heap, conn: &!c Conn, body: &b [byt
     buffer.drop(heap, email);
     buffer.drop(heap, role);
     buffer.drop(heap, tags);
-    return (reply, status);
+    return request;
 }
 
-// Validate, store, answer.
-fn create[&h, &c, &sc, &q, &t, &b](heap: &!h Heap, conn: &!c Conn, sc: &sc schema.Schema, new_user: int, request: &q [byte], table: &t [int], body: &b [byte], out: buffer.Buffer, keep: bool) -> [heap, conn_read, conn_write] buffer.Buffer {
+// ---------------------------------------------------------------------
+// A request in two halves
+// ---------------------------------------------------------------------
+//
+// A request that needs the database has a first half, `begin`, that checks it and either answers
+// (a 4xx, a route with no query) or says what to ask the database -- the encoded request, ready
+// to send -- and a second half, `conclude`, that reads the database's reply and answers or asks
+// again (`GET /users` asks twice: how many, then the page). What passes between the halves is a
+// record of a few integers, `rec`: nothing that points into the request, because a request that
+// is waiting for the database no longer has its parse table or its buffer (`http.server`'s `hold`).
+// The blocking service runs the halves one after the other; the other one runs `begin`, sends,
+// goes on to the next request, and runs `conclude` when the answer arrives.
+
+fn rec_width() -> [] int {
+    return 6;
+}
+
+// What the record holds: the route (`web.find`'s id), whether the connection is kept alive, which
+// query of the route it is at, and what `GET /users` carries from its first query to its second.
+fn rec_route() -> [] int {
+    return 0;
+}
+
+fn rec_keep() -> [] int {
+    return 1;
+}
+
+fn rec_phase() -> [] int {
+    return 2;
+}
+
+fn rec_total() -> [] int {
+    return 3;
+}
+
+fn rec_limit() -> [] int {
+    return 4;
+}
+
+fn rec_offset() -> [] int {
+    return 5;
+}
+
+// What `begin` and `conclude` answer: the response so far, the request to send (empty if there is
+// none), and 0 if the response is complete, 1 if the request is to be sent and `conclude` called
+// with its reply.
+fn done[&h](heap: &!h Heap, out: buffer.Buffer) -> [heap] (buffer.Buffer, buffer.Buffer, int) {
+    return (out, buffer.empty(heap, 1), 0);
+}
+
+// Validate, then the request that stores.
+fn create_begin[&h, &sc, &q, &t, &b, &w](heap: &!h Heap, sc: &sc schema.Schema, new_user: int, request: &q [byte], table: &t [int], body: &b [byte], out: buffer.Buffer, keep: bool, rec: &!w [int]) -> [heap] (buffer.Buffer, buffer.Buffer, int) {
     if !is_json_type(http.header(request, table, "content-type")) {
-        return problem(heap, out, 415, "Unsupported Media Type", "send Content-Type: application/json", keep);
+        return done(heap, problem(heap, out, 415, "Unsupported Media Type", "send Content-Type: application/json", keep));
     }
     let tape = box_slice(heap, json.tape_len(body), 0);
     var answer = out;
+    var next = buffer.empty(heap, 1);
+    var code = 0;
     borrow mut tape as &!tw in {
         let tp = contents(tw);
         let nodes = json.parse(body, tp);
@@ -479,35 +492,9 @@ fn create[&h, &c, &sc, &q, &t, &b](heap: &!h Heap, conn: &!c Conn, sc: &sc schem
                         }
                         buffer.drop(heap, p);
                     } else {
-                        let (reply, status) = insert_user(heap, conn, body, tp, sl);
-                        var id = 0 - 1;
-                        var refused = false;
-                        borrow reply as &rr in {
-                            let m = buffer.bytes(rr);
-                            if answered(m, status) && pg.first_row(m) >= 0 {
-                                id = queries.add_user_id(m, pg.first_row(m));
-                            } else if status == 0 && data_error(m) {
-                                refused = true;
-                            }
-                        }
-                        buffer.drop(heap, reply);
-                        if refused {
-                            answer = problem(heap, answer, 422, "Unprocessable Content", "a value cannot be stored", keep);
-                        } else if id < 1 {
-                            answer = unavailable(heap, answer, keep);
-                        } else {
-                            let user = render_user(heap, id, body, tp, sl);
-                            var location = buffer.append(heap, buffer.empty(heap, 32), "Location: /users/");
-                            location = buffer.push_nat(heap, location, id);
-                            location = buffer.append(heap, location, "\r\n");
-                            borrow user as &ub in {
-                                borrow location as &lb in {
-                                    answer = server.reply_as(heap, answer, 201, "application/json", buffer.bytes(ub), keep, buffer.bytes(lb));
-                                }
-                            }
-                            buffer.drop(heap, location);
-                            buffer.drop(heap, user);
-                        }
+                        buffer.drop(heap, next);
+                        next = insert_user_start(heap, body, tp, sl);
+                        code = 1;
                     }
                 }
             }
@@ -516,6 +503,34 @@ fn create[&h, &c, &sc, &q, &t, &b](heap: &!h Heap, conn: &!c Conn, sc: &sc schem
         }
     }
     unbox_slice(heap, tape);
+    return (answer, next, code);
+}
+
+// The user the database gave back, as 201.
+fn create_conclude[&h, &m](heap: &!h Heap, rep: &m [byte], status: int, out: buffer.Buffer, keep: bool) -> [heap] buffer.Buffer {
+    if status == 0 && data_error(rep) {
+        return problem(heap, out, 422, "Unprocessable Content", "a value cannot be stored", keep);
+    }
+    if !answered(rep, status) || pg.first_row(rep) < 0 {
+        return unavailable(heap, out, keep);
+    }
+    let row = pg.first_row(rep);
+    let id = queries.get_user_id(rep, row);
+    if id < 1 {
+        return unavailable(heap, out, keep);
+    }
+    var answer = out;
+    let user = row_json(heap, rep, row);
+    var location = buffer.append(heap, buffer.empty(heap, 32), "Location: /users/");
+    location = buffer.push_nat(heap, location, id);
+    location = buffer.append(heap, location, "\r\n");
+    borrow user as &ub in {
+        borrow location as &lb in {
+            answer = server.reply_as(heap, answer, 201, "application/json", buffer.bytes(ub), keep, buffer.bytes(lb));
+        }
+    }
+    buffer.drop(heap, location);
+    buffer.drop(heap, user);
     return answer;
 }
 
@@ -551,57 +566,60 @@ fn query_keys_known[&q](query: &q [byte]) -> [] bool {
     return true;
 }
 
-fn list[&h, &c, &q](heap: &!h Heap, conn: &!c Conn, query: &q [byte], out: buffer.Buffer, keep: bool) -> [heap, conn_read, conn_write] buffer.Buffer {
+// Check the query string; the first query is how many users there are.
+fn list_begin[&h, &q, &w](heap: &!h Heap, query: &q [byte], out: buffer.Buffer, keep: bool, rec: &!w [int]) -> [heap] (buffer.Buffer, buffer.Buffer, int) {
     if !query_keys_known(query) {
-        return problem(heap, out, 422, "Unprocessable Content", "unknown query parameter: only limit and offset are taken", keep);
+        return done(heap, problem(heap, out, 422, "Unprocessable Content", "unknown query parameter: only limit and offset are taken", keep));
     }
     let limit = query_number(query, "limit", default_limit());
     let offset = query_number(query, "offset", 0);
     if limit < 1 || limit > max_limit() {
-        return problem(heap, out, 422, "Unprocessable Content", "limit must be an integer from 1 to 100", keep);
+        return done(heap, problem(heap, out, 422, "Unprocessable Content", "limit must be an integer from 1 to 100", keep));
     }
     if offset < 0 {
-        return problem(heap, out, 422, "Unprocessable Content", "offset must be a non-negative integer", keep);
+        return done(heap, problem(heap, out, 422, "Unprocessable Content", "offset must be a non-negative integer", keep));
     }
-    // two round trips: how many there are, and the page
-    let (counted, count_status) = queries.count_users(heap, conn);
-    var total = 0 - 1;
-    borrow counted as &cr in {
-        let m = buffer.bytes(cr);
-        if answered(m, count_status) && pg.first_row(m) >= 0 {
-            total = queries.count_users_total(m, pg.first_row(m));
+    rec[rec_limit()] = limit;
+    rec[rec_offset()] = offset;
+    rec[rec_phase()] = 0;
+    return (out, queries.count_users_start(heap), 1);
+}
+
+// Two round trips: how many there are, and the page.
+fn list_conclude[&h, &m, &w](heap: &!h Heap, rep: &m [byte], status: int, out: buffer.Buffer, keep: bool, rec: &!w [int]) -> [heap] (buffer.Buffer, buffer.Buffer, int) {
+    if rec[rec_phase()] == 0 {
+        var total = 0 - 1;
+        if answered(rep, status) && pg.first_row(rep) >= 0 {
+            total = queries.count_users_total(rep, pg.first_row(rep));
         }
+        if total < 0 {
+            return done(heap, unavailable(heap, out, keep));
+        }
+        rec[rec_total()] = total;
+        rec[rec_phase()] = 1;
+        return (out, queries.list_users_start(heap, rec[rec_limit()], rec[rec_offset()]), 1);
     }
-    buffer.drop(heap, counted);
-    if total < 0 {
-        return unavailable(heap, out, keep);
-    }
-    let (rows, status) = queries.list_users(heap, conn, limit, offset);
     var page = buffer.append(heap, buffer.empty(heap, 2048), "{\"total\":");
-    page = buffer.push_nat(heap, page, total);
+    page = buffer.push_nat(heap, page, rec[rec_total()]);
     page = buffer.append(heap, page, ",\"items\":[");
     var ok = false;
-    borrow rows as &rr in {
-        let m = buffer.bytes(rr);
-        if answered(m, status) {
-            ok = true;
-            var taken = 0;
-            var at = pg.first_row(m);
-            while at >= 0 {
-                if taken > 0 {
-                    page = buffer.append(heap, page, ",");
-                }
-                let item = row_json(heap, m, at);
-                borrow item as &ib in {
-                    page = buffer.append(heap, page, buffer.bytes(ib));
-                }
-                buffer.drop(heap, item);
-                taken = taken + 1;
-                at = pg.next_row(m, at);
+    if answered(rep, status) {
+        ok = true;
+        var taken = 0;
+        var at = pg.first_row(rep);
+        while at >= 0 {
+            if taken > 0 {
+                page = buffer.append(heap, page, ",");
             }
+            let item = row_json(heap, rep, at);
+            borrow item as &ib in {
+                page = buffer.append(heap, page, buffer.bytes(ib));
+            }
+            buffer.drop(heap, item);
+            taken = taken + 1;
+            at = pg.next_row(rep, at);
         }
     }
-    buffer.drop(heap, rows);
     var answer = out;
     if ok {
         page = buffer.append(heap, page, "]}");
@@ -612,24 +630,28 @@ fn list[&h, &c, &q](heap: &!h Heap, conn: &!c Conn, query: &q [byte], out: buffe
         answer = unavailable(heap, answer, keep);
     }
     buffer.drop(heap, page);
-    return answer;
+    return done(heap, answer);
 }
 
-fn one[&h, &c, &p, &s](heap: &!h Heap, conn: &!c Conn, path: &s [byte], params: &p [int], remove: bool, out: buffer.Buffer, keep: bool) -> [heap, conn_read, conn_write] buffer.Buffer {
+// `GET` or `DELETE /users/{id}`: the id must be a number; the request is the lookup or the delete.
+fn one_begin[&h, &p, &s](heap: &!h Heap, path: &s [byte], params: &p [int], remove: bool, out: buffer.Buffer, keep: bool) -> [heap] (buffer.Buffer, buffer.Buffer, int) {
     let id = route.param_nat(path, params, 0);
     if id < 1 {
-        return problem(heap, out, 422, "Unprocessable Content", "id must be a positive integer", keep);
+        return done(heap, problem(heap, out, 422, "Unprocessable Content", "id must be a positive integer", keep));
     }
+    if remove {
+        return (out, queries.delete_user_start(heap, id), 1);
+    }
+    return (out, queries.get_user_start(heap, id), 1);
+}
+
+fn one_conclude[&h, &m](heap: &!h Heap, rep: &m [byte], status: int, remove: bool, out: buffer.Buffer, keep: bool) -> [heap] buffer.Buffer {
     var answer = out;
     if remove {
-        let (got, status) = queries.delete_user(heap, conn, id);
         var seen = 0 - 1;
-        borrow got as &rr in {
-            if answered(buffer.bytes(rr), status) {
-                seen = pg.affected(buffer.bytes(rr));
-            }
+        if answered(rep, status) {
+            seen = pg.affected(rep);
         }
-        buffer.drop(heap, got);
         if seen < 0 {
             return unavailable(heap, answer, keep);
         }
@@ -638,22 +660,17 @@ fn one[&h, &c, &p, &s](heap: &!h Heap, conn: &!c Conn, path: &s [byte], params: 
         }
         return server.reply_empty(heap, answer, 204, keep, "");
     }
-    let (got, status) = queries.get_user(heap, conn, id);
     var found = 0;
-    borrow got as &rr in {
-        let m = buffer.bytes(rr);
-        if !answered(m, status) {
-            found = 0 - 1;
-        } else if pg.first_row(m) >= 0 {
-            found = 1;
-            let item = row_json(heap, m, pg.first_row(m));
-            borrow item as &ib in {
-                answer = server.reply(heap, answer, 200, buffer.bytes(ib), keep);
-            }
-            buffer.drop(heap, item);
+    if !answered(rep, status) {
+        found = 0 - 1;
+    } else if pg.first_row(rep) >= 0 {
+        found = 1;
+        let item = row_json(heap, rep, pg.first_row(rep));
+        borrow item as &ib in {
+            answer = server.reply(heap, answer, 200, buffer.bytes(ib), keep);
         }
+        buffer.drop(heap, item);
     }
-    buffer.drop(heap, got);
     if found < 0 {
         return unavailable(heap, answer, keep);
     }
@@ -663,23 +680,33 @@ fn one[&h, &c, &p, &s](heap: &!h Heap, conn: &!c Conn, path: &s [byte], params: 
     return answer;
 }
 
-// One parsed request in, one response appended to `out`.
-fn handle[&h, &c, &r, &sc, &d, &q, &t, &p, &b](heap: &!h Heap, conn: &!c Conn, api: &r web.Api, sc: &sc schema.Schema, new_user: int, doc: &d [byte], request: &q [byte], table: &t [int], params: &!p [int], body: &b [byte], out: buffer.Buffer) -> [heap, conn_read, conn_write] buffer.Buffer {
+// One parsed request in: the response so far and the request for the database, if it needs one.
+fn begin[&h, &r, &sc, &d, &q, &t, &p, &b, &w](heap: &!h Heap, api: &r web.Api, sc: &sc schema.Schema, new_user: int, doc: &d [byte], request: &q [byte], table: &t [int], params: &!p [int], body: &b [byte], out: buffer.Buffer, rec: &!w [int]) -> [heap] (buffer.Buffer, buffer.Buffer, int) {
     let keep = http.keeps_alive(table);
     let path = http.path(request, table);
     let id = web.find(api, http.method(request, table), path, params);
+    rec[rec_route()] = id;
+    rec[rec_phase()] = 0;
+    if keep {
+        rec[rec_keep()] = 1;
+    } else {
+        rec[rec_keep()] = 0;
+    }
     if id == 3 {
-        return create(heap, conn, sc, new_user, request, table, body, out, keep);
+        return create_begin(heap, sc, new_user, request, table, body, out, keep, rec);
+    }
+    if id == 2 {
+        return list_begin(heap, http.query(request, table), out, keep, rec);
+    }
+    if id == 4 {
+        return one_begin(heap, path, params, false, out, keep);
+    }
+    if id == 5 {
+        return one_begin(heap, path, params, true, out, keep);
     }
     var answer = out;
     if id == 1 {
         answer = server.reply(heap, answer, 200, "{\"ok\":true}", keep);
-    } else if id == 2 {
-        answer = list(heap, conn, http.query(request, table), answer, keep);
-    } else if id == 4 {
-        answer = one(heap, conn, path, params, false, answer, keep);
-    } else if id == 5 {
-        answer = one(heap, conn, path, params, true, answer, keep);
     } else if id == 6 {
         answer = server.reply(heap, answer, 200, doc, keep);
     } else if id == 0 - 2 {
@@ -693,12 +720,59 @@ fn handle[&h, &c, &r, &sc, &d, &q, &t, &p, &b](heap: &!h Heap, conn: &!c Conn, a
     } else {
         answer = problem(heap, answer, 404, "Not Found", "no such route", keep);
     }
-    return answer;
+    return done(heap, answer);
+}
+
+// The database's rep to what `begin` asked (or to what this asked last): the response, or the next request.
+fn conclude[&h, &m, &w](heap: &!h Heap, rep: &m [byte], status: int, out: buffer.Buffer, rec: &!w [int]) -> [heap] (buffer.Buffer, buffer.Buffer, int) {
+    let route = rec[rec_route()];
+    let keep = rec[rec_keep()] == 1;
+    if route == 3 {
+        return done(heap, create_conclude(heap, rep, status, out, keep));
+    }
+    if route == 2 {
+        return list_conclude(heap, rep, status, out, keep, rec);
+    }
+    return done(heap, one_conclude(heap, rep, status, route == 5, out, keep));
 }
 
 // ---------------------------------------------------------------------
-// The loop
+// The loops
 // ---------------------------------------------------------------------
+
+// One request to the database on the one connection, waiting for the answer: what `pg.run_named` does.
+fn round_trip[&h, &c, &r](heap: &!h Heap, conn: &!c Conn, request: &r [byte]) -> [heap, conn_read, conn_write] (buffer.Buffer, int) {
+    if !pg.send(conn, request) {
+        return (buffer.empty(heap, 8), 6);
+    }
+    return pg.receive(heap, conn);
+}
+
+// The blocking service: `begin`, and while it has a request, send it and wait.
+fn handle[&h, &c, &r, &sc, &d, &q, &t, &p, &b, &w](heap: &!h Heap, conn: &!c Conn, api: &r web.Api, sc: &sc schema.Schema, new_user: int, doc: &d [byte], request: &q [byte], table: &t [int], params: &!p [int], body: &b [byte], out: buffer.Buffer, rec: &!w [int]) -> [heap, conn_read, conn_write] buffer.Buffer {
+    let (first, req, started) = begin(heap, api, sc, new_user, doc, request, table, params, body, out, rec);
+    var answer = first;
+    var next = req;
+    var code = started;
+    while code == 1 {
+        var after = buffer.empty(heap, 1);
+        borrow next as &nb in {
+            let (got, status) = round_trip(heap, conn, buffer.bytes(nb));
+            borrow got as &gb in {
+                let (o, n, c) = conclude(heap, buffer.bytes(gb), status, answer, rec);
+                answer = o;
+                buffer.drop(heap, after);
+                after = n;
+                code = c;
+            }
+            buffer.drop(heap, got);
+        }
+        buffer.drop(heap, next);
+        next = after;
+    }
+    buffer.drop(heap, next);
+    return answer;
+}
 
 fn run[&h, &k, &l, &c](heap: &!h Heap, clock: &k Clock, listener: &!l Listener, conn: &!c Conn) -> [heap, conn_accept, conn_read, conn_write, poll, clock] int {
     match poller_new() {
@@ -712,6 +786,7 @@ fn run[&h, &k, &l, &c](heap: &!h Heap, clock: &k Clock, listener: &!l Listener, 
                 }
             }
             let params = box_slice(heap, 2 * widest, 0);
+            let rec = box_slice(heap, rec_width(), 0);
             var out = buffer.empty(heap, 4096);
             while true {
                 srv = server.wait(heap, srv, clock, listener, 1000);
@@ -729,10 +804,12 @@ fn run[&h, &k, &l, &c](heap: &!h Heap, clock: &k Clock, listener: &!l Listener, 
                         }
                         borrow srv as &sr in {
                             borrow mut params as &!pw in {
-                                borrow api as &ar in {
-                                    borrow sc as &scr in {
-                                        borrow doc as &dr in {
-                                            out = handle(heap, conn, ar, scr, new_user, buffer.bytes(dr), server.head(sr), server.parsed(sr), contents(pw), server.body(sr), out);
+                                borrow mut rec as &!rw in {
+                                    borrow api as &ar in {
+                                        borrow sc as &scr in {
+                                            borrow doc as &dr in {
+                                                out = handle(heap, conn, ar, scr, new_user, buffer.bytes(dr), server.head(sr), server.parsed(sr), contents(pw), server.body(sr), out, contents(rw));
+                                            }
                                         }
                                     }
                                 }
@@ -752,9 +829,213 @@ fn run[&h, &k, &l, &c](heap: &!h Heap, clock: &k Clock, listener: &!l Listener, 
             web.drop(heap, api);
             schema.drop(heap, sc);
             unbox_slice(heap, params);
+            unbox_slice(heap, rec);
             return 0;
         }
         Polling::Failed(e) => {
+            return 4;
+        }
+    }
+}
+
+// The non-blocking service: the same `begin` and `conclude`, but a request that needs the database
+// is *held* (`server.hold`), its encoded request is queued on the pool (`pool.submit`), and the loop
+// goes on to the next request; the database's reply, when the poller says it has arrived, finishes it.
+// The ticket `hold` answers is the pool's tag, and names the request's record.
+fn run_pool[&h, &k, &l](heap: &!h Heap, clock: &k Clock, listener: &!l Listener, pl0: pool.Pool) -> [heap, conn_accept, conn_read, conn_write, poll, clock] int {
+    var pl = pl0;
+    match poller_new() {
+        Polling::Ok(p) => {
+            var srv = server.open(heap, p, listener, 16384, 0, 9);
+            borrow mut srv as &!sw in {
+                borrow mut pl as &!qw in {
+                    pool.start(qw, server.poller(sw), server.first_token(sw));
+                }
+            }
+            let (sc, new_user, api, doc) = setup(heap);
+            var widest = 1;
+            borrow api as &ar in {
+                if web.most_params(ar) > 1 {
+                    widest = web.most_params(ar);
+                }
+            }
+            let params = box_slice(heap, 2 * widest, 0);
+            // `begin`'s record while the request is in hand, and one for every ticket's slot after it is held
+            let scratch = box_slice(heap, rec_width(), 0);
+            let records = box_slice(heap, 2048 * rec_width(), 0);
+            // what the poller said about the pool's connections, copied out of the server
+            let seen = box_slice(heap, 128, 0);
+            var out = buffer.empty(heap, 4096);
+            while true {
+                srv = server.wait(heap, srv, clock, listener, 1000);
+                var events = 0;
+                borrow srv as &sr in {
+                    borrow mut seen as &!ew in {
+                        events = server.foreign_count(sr);
+                        var j = 0;
+                        while j < 2 * events {
+                            contents(ew)[j] = server.foreign(sr)[j];
+                            j = j + 1;
+                        }
+                    }
+                }
+                var e = 0;
+                while e < events {
+                    var token = 0 - 1;
+                    var readiness = 0;
+                    borrow seen as &er in {
+                        token = contents(er)[2 * e];
+                        readiness = contents(er)[2 * e + 1];
+                    }
+                    borrow mut srv as &!sw in {
+                        borrow mut pl as &!qw in {
+                            if pool.owns(qw, token) {
+                                pool.pump(qw, server.poller(sw), token, readiness);
+                            }
+                        }
+                    }
+                    e = e + 1;
+                }
+                // the queries that have an answer: finish their requests
+                var ticket = 0 - 1;
+                borrow mut pl as &!qw in {
+                    ticket = pool.next_done(qw);
+                }
+                while ticket >= 0 {
+                    let slot = server.ticket_slot(ticket);
+                    borrow mut out as &!ob in {
+                        buffer.clear(ob);
+                    }
+                    var next = buffer.empty(heap, 1);
+                    var code = 0;
+                    borrow pl as &qr in {
+                        borrow mut records as &!rw in {
+                            let (o, n, c) = conclude(heap, pool.reply(qr), pool.status(qr), out, contents(rw)[slot * rec_width()..(slot + 1) * rec_width()]);
+                            out = o;
+                            buffer.drop(heap, next);
+                            next = n;
+                            code = c;
+                        }
+                    }
+                    if code == 1 {
+                        var sent = 0 - 1;
+                        borrow next as &nb in {
+                            borrow mut srv as &!sw in {
+                                borrow mut pl as &!qw in {
+                                    sent = pool.submit(qw, server.poller(sw), ticket, buffer.bytes(nb));
+                                }
+                            }
+                        }
+                        if sent != 0 {
+                            borrow records as &rr in {
+                                out = unavailable(heap, out, contents(rr)[slot * rec_width() + rec_keep()] == 1);
+                            }
+                            code = 0;
+                        }
+                    }
+                    buffer.drop(heap, next);
+                    if code == 0 {
+                        borrow mut srv as &!sw in {
+                            borrow out as &ob in {
+                                server.answer(sw, ticket, buffer.bytes(ob));
+                            }
+                        }
+                    }
+                    borrow mut pl as &!qw in {
+                        ticket = pool.next_done(qw);
+                    }
+                }
+                // new requests
+                var more = true;
+                while more {
+                    var slot = 0 - 1;
+                    borrow mut srv as &!sw in {
+                        slot = server.next(heap, sw);
+                    }
+                    if slot < 0 {
+                        more = false;
+                    } else {
+                        borrow mut out as &!ob in {
+                            buffer.clear(ob);
+                        }
+                        var request = buffer.empty(heap, 1);
+                        var code = 0;
+                        var keep = true;
+                        borrow srv as &sr in {
+                            borrow mut params as &!pw in {
+                                borrow mut scratch as &!cw in {
+                                    borrow api as &ar in {
+                                        borrow sc as &scr in {
+                                            borrow doc as &dr in {
+                                                let (o, n, c) = begin(heap, ar, scr, new_user, buffer.bytes(dr), server.head(sr), server.parsed(sr), contents(pw), server.body(sr), out, contents(cw));
+                                                out = o;
+                                                buffer.drop(heap, request);
+                                                request = n;
+                                                code = c;
+                                                keep = contents(cw)[rec_keep()] == 1;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if code == 0 {
+                            borrow mut srv as &!sw in {
+                                borrow out as &ob in {
+                                    server.respond(sw, buffer.bytes(ob));
+                                }
+                            }
+                        } else {
+                            var held = 0 - 1;
+                            borrow mut srv as &!sw in {
+                                held = server.hold(sw);
+                            }
+                            let at = server.ticket_slot(held) * rec_width();
+                            borrow scratch as &cr in {
+                                borrow mut records as &!rw in {
+                                    var i = 0;
+                                    while i < rec_width() {
+                                        contents(rw)[at + i] = contents(cr)[i];
+                                        i = i + 1;
+                                    }
+                                }
+                            }
+                            var sent = 0 - 1;
+                            borrow request as &qb in {
+                                borrow mut srv as &!sw in {
+                                    borrow mut pl as &!qw in {
+                                        sent = pool.submit(qw, server.poller(sw), held, buffer.bytes(qb));
+                                    }
+                                }
+                            }
+                            if sent != 0 {
+                                // nowhere to send it: every connection full or gone
+                                out = unavailable(heap, out, keep);
+                                borrow mut srv as &!sw in {
+                                    borrow out as &ob in {
+                                        server.answer(sw, held, buffer.bytes(ob));
+                                    }
+                                }
+                            }
+                        }
+                        buffer.drop(heap, request);
+                    }
+                }
+            }
+            server.close(heap, srv);
+            pool.close(heap, pl);
+            buffer.drop(heap, out);
+            buffer.drop(heap, doc);
+            web.drop(heap, api);
+            schema.drop(heap, sc);
+            unbox_slice(heap, params);
+            unbox_slice(heap, scratch);
+            unbox_slice(heap, records);
+            unbox_slice(heap, seen);
+            return 0;
+        }
+        Polling::Failed(e) => {
+            pool.close(heap, pl);
             return 4;
         }
     }
@@ -803,14 +1084,34 @@ fn login[&h, &g, &c, &z](heap: &!h Heap, args: &g Args, conn: &!c Conn, rng: &z 
     return bad;
 }
 
-// `tcp_listen`'s flags: 1 (SO_REUSEPORT) if there is an eighth argument, so that copies of this service
-// can share a port and the kernel spreads the connections between them. Each copy has its own database
-// connection, so while one waits for PostgreSQL another can run.
+// `tcp_listen`'s flags: 1 (SO_REUSEPORT) if there is an eighth argument other than `-`, so that copies
+// of this service can share a port and the kernel spreads the connections between them. Each copy has
+// its own database connection, so while one waits for PostgreSQL another can run.
 fn listen_flags[&g](args: &g Args) -> [args] int {
-    if arg_count(args) == 8 {
+    if arg_count(args) >= 8 && !bytes.equal(arg(args, 7), "-") {
         return 1;
     }
     return 0;
+}
+
+// The ninth argument: how many database connections for the non-blocking service; none (0) for the blocking one.
+fn pool_size[&g](args: &g Args) -> [args] int {
+    if arg_count(args) == 9 {
+        return number_of(arg(args, 8));
+    }
+    return 0;
+}
+
+fn announce[&h, &i](heap: &!h Heap, io: &!i Io, port: int) -> [heap, err_write] int {
+    var line = buffer.append(heap, buffer.empty(heap, 64), "listening on ");
+    line = buffer.push_nat(heap, line, port);
+    line = buffer.push(heap, line, byte_of(10));
+    var wrote = 0;
+    borrow line as &lb in {
+        wrote = io.error_all(io, buffer.bytes(lb));
+    }
+    buffer.drop(heap, line);
+    return wrote;
 }
 
 fn main(world: World) -> [] int {
@@ -819,57 +1120,109 @@ fn main(world: World) -> [] int {
     let rng = narrow(fs, "/dev/urandom");
     var port = 0 - 1;
     var db_port = 0 - 1;
+    var lanes = 0;
     borrow args as &g in {
-        if arg_count(g) == 7 || arg_count(g) == 8 {
+        if arg_count(g) >= 7 && arg_count(g) <= 9 {
             port = number_of(arg(g, 1));
             db_port = number_of(arg(g, 3));
+            lanes = pool_size(g);
         }
     }
     var status = 2;
-    if port > 0 && port < 65536 && db_port > 0 && db_port < 65536 {
+    if port > 0 && port < 65536 && db_port > 0 && db_port < 65536 && lanes >= 0 {
         status = 3;
         borrow net as &nn in {
             borrow args as &g in {
-                match tcp_connect(nn, arg(g, 2), db_port) {
-                    Dialed::Ok(dialed) => {
-                        var conn = dialed;
-                        borrow mut conn as &!ch in {
-                            borrow mut heap as &!h in {
-                                status = 5;
-                                borrow rng as &z in {
-                                    if login(h, g, ch, z) == 0 {
-                                        status = 3;
-                                        match tcp_listen(nn, port, 1024, listen_flags(g)) {
-                                            Listening::Ok(l) => {
-                                                var listener = l;
-                                                borrow mut listener as &!lh in {
-                                                    listener_nonblocking(lh);
-                                                    borrow mut io as &!i in {
-                                                        var line = buffer.append(h, buffer.empty(h, 64), "listening on ");
-                                                        line = buffer.push_nat(h, line, port);
-                                                        line = buffer.push(h, line, byte_of(10));
-                                                        borrow line as &lb in {
-                                                            io.error_all(i, buffer.bytes(lb));
+                if lanes == 0 {
+                    match tcp_connect(nn, arg(g, 2), db_port) {
+                        Dialed::Ok(dialed) => {
+                            var conn = dialed;
+                            borrow mut conn as &!ch in {
+                                borrow mut heap as &!h in {
+                                    status = 5;
+                                    borrow rng as &z in {
+                                        if login(h, g, ch, z) == 0 {
+                                            status = 3;
+                                            match tcp_listen(nn, port, 1024, listen_flags(g)) {
+                                                Listening::Ok(l) => {
+                                                    var listener = l;
+                                                    borrow mut listener as &!lh in {
+                                                        listener_nonblocking(lh);
+                                                        borrow mut io as &!i in {
+                                                            announce(h, i, port);
                                                         }
-                                                        buffer.drop(h, line);
+                                                        borrow clock as &c in {
+                                                            status = run(h, c, lh, ch);
+                                                        }
                                                     }
-                                                    borrow clock as &c in {
-                                                        status = run(h, c, lh, ch);
-                                                    }
+                                                    listener_close(listener);
                                                 }
-                                                listener_close(listener);
-                                            }
-                                            Listening::Failed(e) => {
+                                                Listening::Failed(e) => {
+                                                }
                                             }
                                         }
                                     }
                                 }
                             }
+                            conn_close(conn);
                         }
-                        conn_close(conn);
+                        Dialed::Failed(e) => {
+                            status = 4;
+                        }
                     }
-                    Dialed::Failed(e) => {
-                        status = 4;
+                } else {
+                    borrow mut heap as &!h in {
+                        var pl = pool.empty(h, lanes, 64, 131072, 131072);
+                        var added = 0;
+                        var n = 0;
+                        while n < lanes {
+                            match tcp_connect(nn, arg(g, 2), db_port) {
+                                Dialed::Ok(dialed) => {
+                                    var conn = dialed;
+                                    var s = 5;
+                                    borrow mut conn as &!ch in {
+                                        borrow rng as &z in {
+                                            s = login(h, g, ch, z);
+                                        }
+                                    }
+                                    if s == 0 {
+                                        let (grown, slot) = pool.add(h, pl, conn);
+                                        pl = grown;
+                                        if slot >= 0 {
+                                            added = added + 1;
+                                        }
+                                    } else {
+                                        conn_close(conn);
+                                    }
+                                }
+                                Dialed::Failed(e) => {
+                                }
+                            }
+                            n = n + 1;
+                        }
+                        if added == lanes {
+                            match tcp_listen(nn, port, 1024, listen_flags(g)) {
+                                Listening::Ok(l) => {
+                                    var listener = l;
+                                    borrow mut listener as &!lh in {
+                                        listener_nonblocking(lh);
+                                        borrow mut io as &!i in {
+                                            announce(h, i, port);
+                                        }
+                                        borrow clock as &c in {
+                                            status = run_pool(h, c, lh, pl);
+                                        }
+                                    }
+                                    listener_close(listener);
+                                }
+                                Listening::Failed(e) => {
+                                    pool.close(h, pl);
+                                }
+                            }
+                        } else {
+                            status = 5;
+                            pool.close(h, pl);
+                        }
                     }
                 }
             }

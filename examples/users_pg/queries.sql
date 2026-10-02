@@ -2,8 +2,10 @@
 --
 --     pgen <host> <port> <user> users_pg <password|-> examples/users_pg/queries.sql > examples/users_pg/queries.ls
 --
--- `get_user` and `list_users` select the same columns in the same order: users_pg reads rows
--- of both with `get_user`'s accessors.
+-- `get_user`, `list_users` and `add_user` (what it returns) select the same columns in the same order:
+-- users_pg reads rows of all three with `get_user`'s accessors, so a created user is answered from the
+-- row the database gave back, not from the request, which a request that waits for the database no
+-- longer has.
 
 -- name: count_users
 select count(*) as total from users
@@ -15,7 +17,7 @@ select id, name, email, age, role, tags from users order by id limit $1 offset $
 select id, name, email, age, role, tags from users where id = $1
 
 -- name: add_user name email? age? role? tags?
-insert into users (name, email, age, role, tags) values ($1, $2, $3, $4, $5) returning id
+insert into users (name, email, age, role, tags) values ($1, $2, $3, $4, $5) returning id, name, email, age, role, tags
 
 -- name: delete_user id
 delete from users where id = $1
