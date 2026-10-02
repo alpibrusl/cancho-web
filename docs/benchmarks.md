@@ -285,7 +285,7 @@ section 9): PostgreSQL parses and plans each query once per connection instead o
 times both builds of `users_pg` -- the one that parses on every call (the numbers above) and the one that does
 not -- with the FastAPI services and `pgbench` in the same session, same machine, same pinning:
 
-| requests a second, median of 3 | GET one user | GET a page of 20 | POST, invalid (422) | POST, create |
+| requests a second, median of 3 (the create column is noisy: see below) | GET one user | GET a page of 20 | POST, invalid (422) | POST, create |
 |---|---:|---:|---:|---:|
 | **lex-sys `users_pg`, prepared** | **14,976** | **4,496** | **95,328** | **4,404** |
 | lex-sys `users_pg`, parsing every call (before) | 9,788 | 3,865 | 90,902 | 2,748 |
