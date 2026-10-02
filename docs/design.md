@@ -1,7 +1,7 @@
 # lexsys-web: a FastAPI-shaped layer for lex-sys
 
-> **Status: design.** Nothing here is built, and the first section says what it
-> does *not* try to be.
+> **Status: design, with one real example built** (§7). The framework layer is not
+> extracted yet, and the first section says what it does *not* try to be.
 
 ## 1. What it is, and is not
 
@@ -106,3 +106,53 @@ Each is a thing that runs and is tested before the next starts.
 3. **Streaming.** `http.server` hands over whole requests. Bodies larger than
    its buffer (413 today), `Expect: 100-continue` and TLS are its open items
    (`lex-sys` `docs/server.md` §6), and this layer inherits them.
+
+## 7. What building a real service found
+
+`examples/users` is milestones 1-3 and 4 (by hand) built as a service rather than
+a framework: routes with typed parameters, a body validated by `lexsys-schema`,
+`problem+json` errors, and an OpenAPI document that embeds the generated schemas.
+`tests/e2e.py` runs it on a real socket and holds it to that document, and
+Schemathesis generates requests from the document. It is the reason to write
+examples before the layer: a framework extracted from nothing would have encoded
+the wrong decisions.
+
+**Defects it found in `lexsys-schema`** (fixed there, recorded in that repo's
+design §11-§12): `150.0` is an integer, and string length counts code points. Both
+were decisions the schema repository's own tests agreed with, because the tests
+had been shaped to the decisions. Schemathesis, which reads the generated document
+the way the standard does, disagreed on the first run.
+
+**Defects it found in this repository's own example**, fixed here: an unknown query
+parameter has to be refused for the reason an unknown body field is; the document
+must state the integer maximum the server enforces (a 17-digit limit that is true
+of the server and false of the contract is a defect in the contract); and
+`json.to_int` on a float-spelled integer answered 0, which would have stored
+`"age": 0` silently (hence `schema.to_int`).
+
+**Gaps in the packages underneath -- found by this example, since fixed** (`lex-sys`,
+`http-server.md` §8, `http.md`, `json.md` §6.1; each with a test that fails without it):
+
+* `server.reply` hard-coded `Content-Type: application/json`, so `problem+json` needed
+  the example's own `reply_as`. **Fixed:** `server.reply_as` takes the content type.
+* `http.respond_head` always wrote `Content-Length`, so a correct `204 No Content`
+  was impossible and `DELETE` answered 200 with the deleted record. **Fixed:**
+  `http.respond_no_content` / `server.reply_empty` write a `204`/`304` head with
+  neither header; `DELETE` is a `204`, the document declares it with no `content`, and
+  `tests/e2e.py` checks that the answer has no body and neither header and that two
+  pipelined `204`s and a `200` stay framed.
+* `json.Writer` could not splice a fragment, so the OpenAPI document and the list were
+  assembled with `Buffer`s, correct only by construction. **Fixed:**
+  `json.put_fragment` takes any complete JSON value and *checks* it (a fragment that is
+  not exactly one value traps). The document's static `paths` is now a fragment, so a
+  typo stops the service at start-up instead of serving an invalid document.
+* The store was fixed-capacity (10,000 users, 4 MiB) because a `res` field cannot be
+  replaced through a `&!` reference. **Fixed in the example, not in `lex-sys`:** growing
+  takes and returns the `Store` by value, as `std.buffer` and `std.vec` do (reading and
+  deleting still go by reference). It now grows to 100,000 users or 64 MiB;
+  `Growth.test_the_store_grows_past_what_the_old_fixed_arena_held` creates 12,000
+  ~400-byte users (4.8 MB, past the old arena) and fails with a `503` when the arena
+  is capped at the old size.
+
+**What the example does not test yet:** throughput and tail latency against the
+same service in FastAPI (milestone 6), TLS, streaming bodies.
