@@ -54,10 +54,17 @@ filesystem**.
 
 ## Measured
 
-Against the same API in FastAPI (equivalence-checked first), on one core each:
-about **23x** the requests a second on a read, **9x** on a page, **16x** on a create, and a
-p99 of 0.36 ms against 14 ms. [`docs/benchmarks.md`](docs/benchmarks.md) has the table, the
-method, and why to read the ratios rather than the absolute figures.
+On one core each, every implementation checked to do the same work first
+([`docs/benchmarks.md`](docs/benchmarks.md) has the tables, the method, and what each
+comparison does and does not show):
+
+* against **FastAPI**: about 23x the requests a second on a read, 9x on a page, 16x on a
+  create, and a p99 of 0.4 ms against 12 ms;
+* against **Go's `net/http`**: 1.5x on a read, a create and a rejected body -- and **0.6x on a
+  page**, where Go is faster;
+* against a **hand-written C server** for the same API: within noise on a read, behind it by
+  15-27% on a rejected body and a create, and 2.4x behind on a page; and 87% of the
+  most one core can do over loopback TCP (a server that does no work).
 
 ## Licence
 

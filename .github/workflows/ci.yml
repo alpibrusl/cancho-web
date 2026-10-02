@@ -57,8 +57,17 @@ jobs:
           SCHEMA_DIR: ${{ github.workspace }}/lexsys-schema
         run: python3 tests/e2e.py
 
-      # The equivalence check the benchmark runs first needs FastAPI; it is
-      # not run here. Checking the harness still compiles is enough.
+      # The Go and C servers the benchmark compares against must still do the
+      # same work as the service (the gate `benches/run.sh` runs before timing).
+      # The FastAPI half of that gate and the timing are not run here.
+      - name: Go and C implementations agree with the service
+        working-directory: web
+        env:
+          LEX_SYS: ${{ github.workspace }}/lex-sys/target/release/lex-sys
+          LEX_SYS_DIR: ${{ github.workspace }}/lex-sys
+          SCHEMA_DIR: ${{ github.workspace }}/lexsys-schema
+        run: benches/check.sh
+
       - name: kload compiles
         working-directory: web
         run: cc -O2 -o /tmp/kload benches/kload.c -lpthread

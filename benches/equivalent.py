@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Check that two servers do the same work before their speeds are compared.
 
-    python3 benches/equivalent.py <port-a> <port-b>
+    python3 benches/equivalent.py <reference-port> <port> [<port> ...]
 
-Both must be freshly started (empty). The same requests go to each; the status codes
-must match, and the JSON bodies of the successful ones must be equal (the `id` of a
-created user is the same, 1, on both). Error *documents* differ by design and are not
-compared, only their status.
+All must be freshly started (empty). The same requests go to each; every server's
+status codes must match the reference's (the first port), and the JSON bodies of the
+successful ones must be equal (the `id` of a created user is the same, 1, on all).
+Error *documents* differ by design and are not compared, only their status.
 """
 import http.client
 import json
@@ -39,14 +39,18 @@ CASES = [
     ("POST", "/users", json.dumps({"age": 3})),
     ("GET", "/health", None),
 ]
-a, b = int(sys.argv[1]), int(sys.argv[2])
+ref, others = int(sys.argv[1]), [int(p) for p in sys.argv[2:]]
 bad = 0
 for method, path, body in CASES:
-    sa, ba = call(a, method, path, body)
-    sb, bb = call(b, method, path, body)
-    ok = sa == sb and (sa >= 400 or ba == bb)
-    if not ok:
-        bad += 1
-    print("%-4s %-18s %s %s  %s" % (method, path, sa, sb, "ok" if ok else "DIFFERENT: %r vs %r" % (ba, bb)))
+    sr, br = call(ref, method, path, body)
+    row = []
+    for port in others:
+        s, b = call(port, method, path, body)
+        ok = s == sr and (sr >= 400 or b == br)
+        if not ok:
+            bad += 1
+        row.append((s, ok, b))
+    print("%-4s %-18s %s %s  %s" % (method, path, sr, " ".join(str(s) for s, _, _ in row),
+                                    "ok" if all(ok for _, ok, _ in row) else "DIFFERENT: %r vs %r" % (br, [b for _, _, b in row])))
 print("equivalent" if not bad else "%d DIFFER" % bad)
 sys.exit(1 if bad else 0)

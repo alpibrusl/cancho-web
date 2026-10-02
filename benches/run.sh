@@ -1,13 +1,17 @@
 #!/bin/bash
-# The users API against FastAPI on four workloads (docs/benchmarks.md).
+# The users API against FastAPI, Go and a hand-written C server, on four workloads
+# (docs/benchmarks.md).
 #
 #   LEX_SYS=... benches/run.sh [rounds]
 #
 # Each server is pinned to core 0, alone, and the load generator to cores 2,3 --
 # `taskset`, so this wants a machine with at least 4 cores. Before any timing,
-# `equivalent.py` sends the same requests to the lex-sys service and to the FastAPI
-# app and refuses to go on unless the statuses and the successful bodies agree: a
-# comparison of speeds is only a comparison if the work is the same work.
+# `equivalent.py` sends the same requests to the lex-sys service and to every other
+# implementation and refuses to go on unless the statuses and the successful bodies
+# agree, and `edges.py` does the same for the implementations that are not frameworks'
+# to get wrong (the Go and C servers): a comparison of speeds is only a comparison if
+# the work is the same work. The ceiling (a server that answers one canned reply)
+# does no work and is timed on GET one user only.
 set -euo pipefail
 here=$(cd "$(dirname "$0")/.." && pwd)
 rounds=${1:-3}
@@ -16,13 +20,20 @@ create_requests=${CREATE_REQUESTS:-40000}
 kload=${KLOAD:-/tmp/kload}
 [ -x "$kload" ] || gcc -O2 -o "$kload" "$here/benches/kload.c" -lpthread
 "$here/scripts/build.sh" "$here/examples/users/users.ls" "$here/build/users"
+(cd "$here/benches/go_users" && go build -o "$here/build/go_users" .)
+gcc -O2 -Wall -o "$here/build/floor" "$here/benches/c_floor/floor.c"
+gcc -O2 -Wall -o "$here/build/ceiling" "$here/benches/c_floor/ceiling.c"
 
 # name | command (given $PORT) | how to stop
 declare -a NAMES CMDS
 NAMES+=("lex-sys users");                CMDS+=("$here/build/users \$PORT")
+NAMES+=("Go net/http");                  CMDS+=("$here/build/go_users \$PORT")
+NAMES+=("C floor (hand-written epoll)"); CMDS+=("$here/build/floor \$PORT")
+NAMES+=("C ceiling (canned reply)");     CMDS+=("$here/build/ceiling \$PORT")
 NAMES+=("FastAPI, uvicorn (asyncio)");   CMDS+=("cd $here/benches/fastapi_users && python3 -m uvicorn app:app --port \$PORT")
 NAMES+=("FastAPI, uvloop + httptools");  CMDS+=("cd $here/benches/fastapi_users && python3 -m uvicorn app:app --port \$PORT --loop uvloop --http httptools")
 NAMES+=("FastAPI lean, uvloop + httptools"); CMDS+=("cd $here/benches/fastapi_users && LEAN=1 python3 -m uvicorn app:app --port \$PORT --loop uvloop --http httptools")
+LEX=0; GO=1; FLOOR=2; CEILING=3; FASTAPI=4
 
 BODY='{"name":"Ada Lovelace","email":"ada@example.org","age":36,"role":"admin","tags":["math","code"]}'
 BAD='{"name":""}'
@@ -46,11 +57,20 @@ PY
 }
 load() { taskset -c 2,3 "$kload" "$port" 2 16 "$secs" "$@"; }
 
-echo "== equivalence"
-start 0; A=$PID; PA=$port
-start 1; B=$PID; PB=$port
-python3 "$here/benches/equivalent.py" "$PA" "$PB"
-PID=$A; stop; PID=$B; stop
+echo "== equivalence (the 16 requests; lex-sys users, Go, C floor, FastAPI)"
+declare -a PIDS PORTS
+for i in $LEX $GO $FLOOR $FASTAPI; do start $i; PIDS+=("$PID"); PORTS+=("$port"); done
+set +e
+python3 "$here/benches/equivalent.py" "${PORTS[@]}"; eq=$?
+for p in "${PIDS[@]}"; do PID=$p; stop; done
+[ $eq -eq 0 ] || exit 1
+echo "== edge cases (84 more; lex-sys users, Go, C floor)"
+PIDS=(); PORTS=()
+for i in $LEX $GO $FLOOR; do start $i; PIDS+=("$PID"); PORTS+=("$port"); done
+python3 "$here/benches/edges.py" "${PORTS[@]}"; eq=$?
+for p in "${PIDS[@]}"; do PID=$p; stop; done
+set -e
+[ $eq -eq 0 ] || exit 1
 
 printf '\n%-40s %12s %12s %12s %12s\n' "requests a second (median of $rounds)" "GET user" "GET list 20" "POST invalid" "POST create"
 for i in "${!NAMES[@]}"; do
@@ -58,6 +78,7 @@ for i in "${!NAMES[@]}"; do
   for _ in $(seq 1 "$rounds"); do
     start "$i"; preload
     r_read+=("$(KLOAD_EXPECT=200 load /users/500)")
+    if [ "$i" = "$CEILING" ]; then stop; continue; fi
     r_list+=("$(KLOAD_EXPECT=200 load '/users?limit=20')")
     r_bad+=("$(KLOAD_EXPECT=422 load /users - POST "$BAD")")
     stop
@@ -66,5 +87,17 @@ for i in "${!NAMES[@]}"; do
     stop
   done
   med() { printf '%s\n' "$@" | sort -n | sed -n "$(( ($# + 1) / 2 ))p"; }
+  if [ "$i" = "$CEILING" ]; then
+    printf '%-40s %12s %12s %12s %12s\n' "${NAMES[$i]}" "$(med "${r_read[@]}")" - - -
+    continue
+  fi
   printf '%-40s %12s %12s %12s %12s\n' "${NAMES[$i]}" "$(med "${r_read[@]}")" "$(med "${r_list[@]}")" "$(med "${r_bad[@]}")" "$(med "${r_create[@]}")"
+done
+
+echo
+echo "GET one user, latency in microseconds under that load (p50 p90 p99 p99.9 max):"
+for i in $LEX $GO $FLOOR $CEILING $FASTAPI; do
+  start "$i"; preload
+  printf '%-40s %s\n' "${NAMES[$i]}" "$(KLOAD_EXPECT=200 load /users/500 lat | tail -1)"
+  stop
 done
