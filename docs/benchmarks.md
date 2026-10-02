@@ -309,8 +309,8 @@ parsing every time, **24,717 prepared**; the same insert: 8,960 and 11,705.
   the rest is the service rendering 20 rows, each through a JSON writer and a validated fragment for its tags.
   Not profiled here; it is where to look next for that endpoint.
 * **A create gained 60%** (4,404 against 2,748), more than a durable commit's `fsync` could explain on its own:
-  parsing and planning an `INSERT` is more work than for a lookup, and a quarter of a millisecond per create is
-  now 230 microseconds. Lean FastAPI creates at 2,657 with ten connections; lex-sys with one is at 1.7x that.
+  parsing and planning an `INSERT` is more work than for a lookup, and a create went from 364 to 227
+  microseconds. Lean FastAPI creates at 2,657 with ten connections; lex-sys with one is at 1.7x that.
 * **A rejected body** (no database) is unchanged, 95,328 against 90,902, within noise: nothing here touched that path.
 
 Reproduce with `UNPREPARED_BIN=<the older build> benches/run_pg.sh` (it adds the "before" row).
