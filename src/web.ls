@@ -1,0 +1,626 @@
+module web;
+
+// `web` -- declare an API once; get the router and the OpenAPI document from it.
+//
+// Before this module, `examples/users` said what its routes were three times: in
+// the route table (`std.route`), in the `handle` dispatch that tests the id the
+// router returns, and in a hand-written JSON string of OpenAPI `paths`. Nothing
+// stopped the three disagreeing -- a route could be served and undocumented, or
+// documented with a parameter the handler never read. Here an operation is
+// declared once:
+//
+//     let (api, list) = web.operation(heap, api, "GET", "/users", "listUsers");
+//     api = web.query_param(heap, api, list, "limit", limit_node, false);
+//     api = web.respond(heap, api, list, 200, "a page", page_node);
+//     api = web.respond_problem(heap, api, list, 422);
+//
+// `operation` registers the route in a `std.route` router and answers its id --
+// the number `web.find` returns for a matching request, which the handler tests
+// -- and everything declared after it about that id (parameters, the body, the
+// responses) is what `web.openapi` writes. The schemas come from `lexsys-schema`
+// nodes, so a body that is validated and a body that is documented are one object.
+//
+// What this is not yet: it does not validate for the handler (a typed path
+// parameter that fails is still a check the handler makes) and it does not
+// dispatch -- the application keeps its loop and its `if` on the id
+// (`docs/design.md` §2 says why the loop cannot be a callback). It is the
+// declaration half of the layer, and the half that was written three times.
+//
+// Representation: a router, a text pool (every name, path and description,
+// appended once), and one `Vec[int]` of 8-int records, the first int saying what
+// the record is. Declaring is `O(1)` a call; `openapi` scans the records, which is
+// start-up work on a few dozen of them.
+
+import std.buffer;
+import std.bytes;
+import std.json;
+import std.route;
+import std.vec;
+import schema;
+
+pub res struct Api {
+    router: route.Router,
+    recs: vec.Vec[int],
+    text: buffer.Buffer,
+    ops: int,
+}
+
+// Record layout, `rec_width()` ints each:
+//   operation: 1, path_off, path_len, method, id_off, id_len, documented, 0
+//   parameter: 2, op, where (0 path, 1 query), name_off, name_len, node, required, 0
+//   response:  3, op, status, text_off, text_len, node (-1 none, -2 problem), header_off, header_len
+//   component: 4, name_off, name_len, node, 0, 0, 0, 0
+//   body:      5, op, node, 0, 0, 0, 0, 0
+fn rec_width() -> [] int {
+    return 8;
+}
+
+fn tag_op() -> [] int {
+    return 1;
+}
+
+fn tag_param() -> [] int {
+    return 2;
+}
+
+fn tag_resp() -> [] int {
+    return 3;
+}
+
+fn tag_comp() -> [] int {
+    return 4;
+}
+
+fn tag_body() -> [] int {
+    return 5;
+}
+
+pub fn empty[&h](heap: &!h Heap) -> [heap] Api {
+    return Api { router: route.empty(heap), recs: vec.empty(heap, 64, 0), text: buffer.empty(heap, 512), ops: 0 };
+}
+
+// End the API, answering how many operations it declared.
+pub fn drop[&h](heap: &!h Heap, a: Api) -> [heap] int {
+    let Api { router, recs, text, ops } = a;
+    route.drop(heap, router);
+    vec.drop(heap, recs);
+    buffer.drop(heap, text);
+    return ops;
+}
+
+pub fn operation_count[&a](api: &a Api) -> [] int {
+    return api.ops;
+}
+
+// ---------------------------------------------------------------------
+// Declaring
+// ---------------------------------------------------------------------
+
+// `s` appended to the text pool: the pool and where it starts.
+fn text_add[&h, &r](heap: &!h Heap, t: buffer.Buffer, s: &r [byte]) -> [heap] (buffer.Buffer, int) {
+    var at = 0;
+    borrow t as &tr in {
+        at = buffer.size(tr);
+    }
+    return (buffer.append(heap, t, s), at);
+}
+
+fn put_rec[&h](heap: &!h Heap, v: vec.Vec[int], a: int, b: int, c: int, d: int, e: int, f: int, g: int, i: int) -> [heap] vec.Vec[int] {
+    var r = vec.push(heap, v, a);
+    r = vec.push(heap, r, b);
+    r = vec.push(heap, r, c);
+    r = vec.push(heap, r, d);
+    r = vec.push(heap, r, e);
+    r = vec.push(heap, r, f);
+    r = vec.push(heap, r, g);
+    return vec.push(heap, r, i);
+}
+
+// GET 0, POST 1, PUT 2, PATCH 3, DELETE 4; -1 for anything else.
+fn method_code[&m](method: &m [byte]) -> [] int {
+    if bytes.equal(method, "GET") {
+        return 0;
+    }
+    if bytes.equal(method, "POST") {
+        return 1;
+    }
+    if bytes.equal(method, "PUT") {
+        return 2;
+    }
+    if bytes.equal(method, "PATCH") {
+        return 3;
+    }
+    if bytes.equal(method, "DELETE") {
+        return 4;
+    }
+    return 0 - 1;
+}
+
+fn method_key(code: int) -> [] &static [byte] {
+    if code == 0 {
+        return "get";
+    }
+    if code == 1 {
+        return "post";
+    }
+    if code == 2 {
+        return "put";
+    }
+    if code == 3 {
+        return "patch";
+    }
+    return "delete";
+}
+
+fn declare[&h, &m, &p, &o](heap: &!h Heap, a: Api, method: &m [byte], pattern: &p [byte], operation_id: &o [byte], documented: int) -> [heap] (Api, int) {
+    let Api { router, recs, text, ops } = a;
+    let code = method_code(method);
+    if code < 0 {
+        return (Api { router: router, recs: recs, text: text, ops: ops }, 0 - 1);
+    }
+    let id = ops + 1;
+    let r = route.add(heap, router, method, pattern, id);
+    let (t1, path_at) = text_add(heap, text, pattern);
+    let (t2, name_at) = text_add(heap, t1, operation_id);
+    let rc = put_rec(heap, recs, tag_op(), path_at, len(pattern), code, name_at, len(operation_id), documented, 0);
+    return (Api { router: r, recs: rc, text: t2, ops: id }, id);
+}
+
+// A documented operation: routed, and written into the OpenAPI `paths`. Answers the
+// api and the route id (`-1` and nothing registered for a method other than GET,
+// POST, PUT, PATCH, DELETE). `pattern` is a `std.route` pattern (`/users/:id`); the
+// document writes it as `/users/{id}`.
+pub fn operation[&h, &m, &p, &o](heap: &!h Heap, a: Api, method: &m [byte], pattern: &p [byte], operation_id: &o [byte]) -> [heap] (Api, int) {
+    return declare(heap, a, method, pattern, operation_id, 1);
+}
+
+// A route that is served and deliberately not documented (the document itself).
+pub fn internal[&h, &m, &p](heap: &!h Heap, a: Api, method: &m [byte], pattern: &p [byte]) -> [heap] (Api, int) {
+    return declare(heap, a, method, pattern, "", 0);
+}
+
+fn param[&h, &n](heap: &!h Heap, a: Api, op: int, place: int, name: &n [byte], node: int, required: int) -> [heap] Api {
+    let Api { router, recs, text, ops } = a;
+    let (t, at) = text_add(heap, text, name);
+    let rc = put_rec(heap, recs, tag_param(), op, place, at, len(name), node, required, 0);
+    return Api { router: router, recs: rc, text: t, ops: ops };
+}
+
+// A path parameter of the operation's path; `node` is its schema (an integer with a
+// range, say). It is written once for the path, however many operations share it.
+pub fn path_param[&h, &n](heap: &!h Heap, a: Api, op: int, name: &n [byte], node: int) -> [heap] Api {
+    return param(heap, a, op, 0, name, node, 1);
+}
+
+pub fn query_param[&h, &n](heap: &!h Heap, a: Api, op: int, name: &n [byte], node: int, required: bool) -> [heap] Api {
+    var flag = 0;
+    if required {
+        flag = 1;
+    }
+    return param(heap, a, op, 1, name, node, flag);
+}
+
+// The request body of `op`, a JSON document matching schema node `node`.
+pub fn body[&h](heap: &!h Heap, a: Api, op: int, node: int) -> [heap] Api {
+    let Api { router, recs, text, ops } = a;
+    let rc = put_rec(heap, recs, tag_body(), op, node, 0, 0, 0, 0, 0);
+    return Api { router: router, recs: rc, text: text, ops: ops };
+}
+
+fn response[&h, &d](heap: &!h Heap, a: Api, op: int, status: int, description: &d [byte], node: int) -> [heap] Api {
+    let Api { router, recs, text, ops } = a;
+    let (t, at) = text_add(heap, text, description);
+    let rc = put_rec(heap, recs, tag_resp(), op, status, at, len(description), node, 0, 0);
+    return Api { router: router, recs: rc, text: t, ops: ops };
+}
+
+// A response of `op` with a JSON body matching `node`.
+pub fn respond[&h, &d](heap: &!h Heap, a: Api, op: int, status: int, description: &d [byte], node: int) -> [heap] Api {
+    return response(heap, a, op, status, description, node);
+}
+
+// A response with no body (a `204`).
+pub fn respond_empty[&h, &d](heap: &!h Heap, a: Api, op: int, status: int, description: &d [byte]) -> [heap] Api {
+    return response(heap, a, op, status, description, 0 - 1);
+}
+
+// A response that is the shared problem document (`components.responses.Problem`).
+pub fn respond_problem[&h](heap: &!h Heap, a: Api, op: int, status: int) -> [heap] Api {
+    return response(heap, a, op, status, "", 0 - 2);
+}
+
+// A header, a string, on the latest response declared for `op` (a `Location`).
+pub fn response_header[&h, &n](heap: &!h Heap, a: Api, op: int, name: &n [byte]) -> [heap] Api {
+    let Api { router, recs, text, ops } = a;
+    let (t, at) = text_add(heap, text, name);
+    var rc = recs;
+    var i = 0;
+    borrow rc as &rr in {
+        i = vec.size(rr) - rec_width();
+    }
+    var done = false;
+    borrow mut rc as &!w in {
+        while i >= 0 && !done {
+            if vec.get(w, i) == tag_resp() && vec.get(w, i + 1) == op {
+                vec.set(w, i + 6, at);
+                vec.set(w, i + 7, len(name));
+                done = true;
+            }
+            i = i - rec_width();
+        }
+    }
+    return Api { router: router, recs: rc, text: t, ops: ops };
+}
+
+// Name a schema node a component: documents write a `$ref` to it where it is used,
+// and list it under `components.schemas`. A component called `Problem` is also the
+// target of `respond_problem`.
+pub fn component[&h, &n](heap: &!h Heap, a: Api, name: &n [byte], node: int) -> [heap] Api {
+    let Api { router, recs, text, ops } = a;
+    let (t, at) = text_add(heap, text, name);
+    let rc = put_rec(heap, recs, tag_comp(), at, len(name), node, 0, 0, 0, 0);
+    return Api { router: router, recs: rc, text: t, ops: ops };
+}
+
+// ---------------------------------------------------------------------
+// Routing
+// ---------------------------------------------------------------------
+
+// The route id for a request, as `route.find`: the id `operation` answered, `-1`
+// for no such path, `-2` for a path that exists under other methods (a 405).
+pub fn find[&a, &m, &p, &t](api: &a Api, method: &m [byte], path: &p [byte], params: &!t [int]) -> [] int {
+    return route.find(api.router, method, path, params);
+}
+
+pub fn allowed[&h, &a, &p, &t](heap: &!h Heap, api: &a Api, path: &p [byte], params: &!t [int], out: buffer.Buffer) -> [heap] buffer.Buffer {
+    return route.allowed(heap, api.router, path, params, out);
+}
+
+// The widest parameter list any route has: the size a `params` table needs (x2).
+pub fn most_params[&a](api: &a Api) -> [] int {
+    return route.most_params(api.router);
+}
+
+// ---------------------------------------------------------------------
+// The OpenAPI document
+// ---------------------------------------------------------------------
+
+fn text_of[&a](api: &a Api, at: int, n: int) -> [] &a [byte] {
+    return buffer.bytes(api.text)[at..at + n];
+}
+
+fn rec[&a](api: &a Api, i: int, k: int) -> [] int {
+    return vec.get(api.recs, i + k);
+}
+
+// The record index of operation `op` (1-based), or -1.
+fn op_at[&a](api: &a Api, op: int) -> [] int {
+    var seen = 0;
+    var i = 0;
+    while i < vec.size(api.recs) {
+        if rec(api, i, 0) == tag_op() {
+            seen = seen + 1;
+            if seen == op {
+                return i;
+            }
+        }
+        i = i + rec_width();
+    }
+    return 0 - 1;
+}
+
+// Whether operations at records `i` and `j` have the same path.
+fn same_path[&a](api: &a Api, i: int, j: int) -> [] bool {
+    return bytes.equal(text_of(api, rec(api, i, 1), rec(api, i, 2)), text_of(api, rec(api, j, 1), rec(api, j, 2)));
+}
+
+// The record index of the component whose schema is `node`, or -1.
+fn comp_of[&a](api: &a Api, node: int) -> [] int {
+    var i = 0;
+    while i < vec.size(api.recs) {
+        if rec(api, i, 0) == tag_comp() && rec(api, i, 3) == node {
+            return i;
+        }
+        i = i + rec_width();
+    }
+    return 0 - 1;
+}
+
+fn has_component[&a, &n](api: &a Api, name: &n [byte]) -> [] bool {
+    var i = 0;
+    while i < vec.size(api.recs) {
+        if rec(api, i, 0) == tag_comp() && bytes.equal(text_of(api, rec(api, i, 1), rec(api, i, 2)), name) {
+            return true;
+        }
+        i = i + rec_width();
+    }
+    return false;
+}
+
+// `"schema": ...` for `node`: a `$ref` if it is a component, else the generated JSON
+// Schema inline.
+fn put_schema[&h, &a, &s](heap: &!h Heap, w: json.Writer, api: &a Api, sc: &s schema.Schema, node: int) -> [heap] json.Writer {
+    var o = json.put_key(heap, w, "schema");
+    let c = comp_of(api, node);
+    if c >= 0 {
+        o = json.begin_object(heap, o);
+        o = json.put_key(heap, o, "$ref");
+        var target = buffer.append(heap, buffer.empty(heap, 64), "#/components/schemas/");
+        target = buffer.append(heap, target, text_of(api, rec(api, c, 1), rec(api, c, 2)));
+        borrow target as &tb in {
+            o = json.put_string(heap, o, buffer.bytes(tb));
+        }
+        buffer.drop(heap, target);
+        return json.end_object(heap, o);
+    }
+    let fragment = schema.json_schema(heap, sc, node);
+    borrow fragment as &fb in {
+        o = json.put_fragment(heap, o, buffer.bytes(fb));
+    }
+    buffer.drop(heap, fragment);
+    return o;
+}
+
+// `/users/:id` as `/users/{id}`, `/files/*rest` as `/files/{rest}`.
+fn put_path_key[&h, &p](heap: &!h Heap, w: json.Writer, pattern: &p [byte]) -> [heap] json.Writer {
+    var out = buffer.empty(heap, 64);
+    var in_param = false;
+    var i = 0;
+    while i < len(pattern) {
+        let c = int_of(pattern[i]);
+        if in_param && c == 47 {
+            out = buffer.push(heap, out, byte_of(125));
+            in_param = false;
+        }
+        if !in_param && (c == 58 || c == 42) {
+            out = buffer.push(heap, out, byte_of(123));
+            in_param = true;
+        } else {
+            out = buffer.push(heap, out, pattern[i]);
+        }
+        i = i + 1;
+    }
+    if in_param {
+        out = buffer.push(heap, out, byte_of(125));
+    }
+    var o = w;
+    borrow out as &ob in {
+        o = json.put_key(heap, o, buffer.bytes(ob));
+    }
+    buffer.drop(heap, out);
+    return o;
+}
+
+// One parameter object: `{"name", "in", "required", "schema"}`.
+fn put_param[&h, &a, &s](heap: &!h Heap, w: json.Writer, api: &a Api, sc: &s schema.Schema, i: int) -> [heap] json.Writer {
+    var o = json.begin_object(heap, w);
+    o = json.put_key(heap, o, "name");
+    o = json.put_string(heap, o, text_of(api, rec(api, i, 3), rec(api, i, 4)));
+    o = json.put_key(heap, o, "in");
+    if rec(api, i, 2) == 0 {
+        o = json.put_string(heap, o, "path");
+    } else {
+        o = json.put_string(heap, o, "query");
+    }
+    o = json.put_key(heap, o, "required");
+    o = json.put_bool(heap, o, rec(api, i, 6) == 1);
+    o = put_schema(heap, o, api, sc, rec(api, i, 5));
+    return json.end_object(heap, o);
+}
+
+// Whether a path parameter named like the one at record `i` was already declared, by an
+// operation with the path of operation record `first`, at an earlier record.
+fn path_param_seen[&a](api: &a Api, first: int, i: int) -> [] bool {
+    var j = 0;
+    while j < i {
+        if rec(api, j, 0) == tag_param() && rec(api, j, 2) == 0 && bytes.equal(text_of(api, rec(api, j, 3), rec(api, j, 4)), text_of(api, rec(api, i, 3), rec(api, i, 4))) {
+            // declared earlier: by an operation of this same path?
+            let owner = op_at(api, rec(api, j, 1));
+            if owner >= 0 && same_path(api, first, owner) {
+                return true;
+            }
+        }
+        j = j + rec_width();
+    }
+    return false;
+}
+
+fn put_operation[&h, &a, &s](heap: &!h Heap, w: json.Writer, api: &a Api, sc: &s schema.Schema, op: int, at: int) -> [heap] json.Writer {
+    var o = json.begin_object(heap, w);
+    o = json.put_key(heap, o, "operationId");
+    o = json.put_string(heap, o, text_of(api, rec(api, at, 4), rec(api, at, 5)));
+
+    var queries = 0;
+    var i = 0;
+    while i < vec.size(api.recs) {
+        if rec(api, i, 0) == tag_param() && rec(api, i, 1) == op && rec(api, i, 2) == 1 {
+            if queries == 0 {
+                o = json.put_key(heap, o, "parameters");
+                o = json.begin_array(heap, o);
+            }
+            o = put_param(heap, o, api, sc, i);
+            queries = queries + 1;
+        }
+        i = i + rec_width();
+    }
+    if queries > 0 {
+        o = json.end_array(heap, o);
+    }
+
+    i = 0;
+    while i < vec.size(api.recs) {
+        if rec(api, i, 0) == tag_body() && rec(api, i, 1) == op {
+            o = json.put_key(heap, o, "requestBody");
+            o = json.begin_object(heap, o);
+            o = json.put_key(heap, o, "required");
+            o = json.put_bool(heap, o, true);
+            o = json.put_key(heap, o, "content");
+            o = json.begin_object(heap, o);
+            o = json.put_key(heap, o, "application/json");
+            o = json.begin_object(heap, o);
+            o = put_schema(heap, o, api, sc, rec(api, i, 2));
+            o = json.end_object(heap, o);
+            o = json.end_object(heap, o);
+            o = json.end_object(heap, o);
+        }
+        i = i + rec_width();
+    }
+
+    o = json.put_key(heap, o, "responses");
+    o = json.begin_object(heap, o);
+    i = 0;
+    while i < vec.size(api.recs) {
+        if rec(api, i, 0) == tag_resp() && rec(api, i, 1) == op {
+            var status = buffer.push_nat(heap, buffer.empty(heap, 8), rec(api, i, 2));
+            borrow status as &sb in {
+                o = json.put_key(heap, o, buffer.bytes(sb));
+            }
+            buffer.drop(heap, status);
+            o = json.begin_object(heap, o);
+            let node = rec(api, i, 5);
+            if node == 0 - 2 {
+                o = json.put_key(heap, o, "$ref");
+                o = json.put_string(heap, o, "#/components/responses/Problem");
+            } else {
+                o = json.put_key(heap, o, "description");
+                o = json.put_string(heap, o, text_of(api, rec(api, i, 3), rec(api, i, 4)));
+                if rec(api, i, 7) > 0 {
+                    o = json.put_key(heap, o, "headers");
+                    o = json.begin_object(heap, o);
+                    o = json.put_key(heap, o, text_of(api, rec(api, i, 6), rec(api, i, 7)));
+                    o = json.begin_object(heap, o);
+                    o = json.put_key(heap, o, "schema");
+                    o = json.begin_object(heap, o);
+                    o = json.put_key(heap, o, "type");
+                    o = json.put_string(heap, o, "string");
+                    o = json.end_object(heap, o);
+                    o = json.end_object(heap, o);
+                    o = json.end_object(heap, o);
+                }
+                if node >= 0 {
+                    o = json.put_key(heap, o, "content");
+                    o = json.begin_object(heap, o);
+                    o = json.put_key(heap, o, "application/json");
+                    o = json.begin_object(heap, o);
+                    o = put_schema(heap, o, api, sc, node);
+                    o = json.end_object(heap, o);
+                    o = json.end_object(heap, o);
+                }
+            }
+            o = json.end_object(heap, o);
+        }
+        i = i + rec_width();
+    }
+    o = json.end_object(heap, o);
+    return json.end_object(heap, o);
+}
+
+// `"paths": { ... }`: each distinct path of a documented operation once, in the order
+// the paths first appear, with its path parameters and then its operations in the order
+// they were declared.
+fn put_paths[&h, &a, &s](heap: &!h Heap, w: json.Writer, api: &a Api, sc: &s schema.Schema) -> [heap] json.Writer {
+    var o = json.put_key(heap, w, "paths");
+    o = json.begin_object(heap, o);
+    var i = 0;
+    while i < vec.size(api.recs) {
+        if rec(api, i, 0) == tag_op() {
+            var first = true;
+            var j = 0;
+            while j < i {
+                if rec(api, j, 0) == tag_op() && rec(api, j, 6) == 1 && same_path(api, i, j) {
+                    first = false;
+                }
+                j = j + rec_width();
+            }
+            if rec(api, i, 6) == 1 && first {
+                o = put_path_key(heap, o, text_of(api, rec(api, i, 1), rec(api, i, 2)));
+                o = json.begin_object(heap, o);
+
+                // the path's parameters, once each, whichever operation declared them
+                var wrote = 0;
+                var k = 0;
+                while k < vec.size(api.recs) {
+                    if rec(api, k, 0) == tag_param() && rec(api, k, 2) == 0 {
+                        let owner = op_at(api, rec(api, k, 1));
+                        if owner >= 0 && same_path(api, i, owner) && !path_param_seen(api, i, k) {
+                            if wrote == 0 {
+                                o = json.put_key(heap, o, "parameters");
+                                o = json.begin_array(heap, o);
+                            }
+                            o = put_param(heap, o, api, sc, k);
+                            wrote = wrote + 1;
+                        }
+                    }
+                    k = k + rec_width();
+                }
+                if wrote > 0 {
+                    o = json.end_array(heap, o);
+                }
+
+                // its operations
+                var m = 0;
+                var m_op = 0;
+                while m < vec.size(api.recs) {
+                    if rec(api, m, 0) == tag_op() {
+                        m_op = m_op + 1;
+                        if rec(api, m, 6) == 1 && same_path(api, i, m) {
+                            o = json.put_key(heap, o, method_key(rec(api, m, 3)));
+                            o = put_operation(heap, o, api, sc, m_op, m);
+                        }
+                    }
+                    m = m + rec_width();
+                }
+                o = json.end_object(heap, o);
+            }
+        }
+        i = i + rec_width();
+    }
+    return json.end_object(heap, o);
+}
+
+fn problem_response_json() -> [] &static [byte] {
+    return "{\"Problem\":{\"description\":\"a problem\",\"content\":{\"application/problem+json\":{\"schema\":{\"$ref\":\"#/components/schemas/Problem\"}}}}}";
+}
+
+// The document: OpenAPI 3.1, `info`, `paths` from the declared operations, and
+// `components` -- the shared problem response (if a component is named `Problem`) and
+// every component's schema, generated by `lexsys-schema` from the nodes the
+// application validates with.
+pub fn openapi[&h, &a, &s, &t, &v](heap: &!h Heap, api: &a Api, sc: &s schema.Schema, title: &t [byte], version: &v [byte]) -> [heap] buffer.Buffer {
+    var w = json.writer(heap, 8192);
+    w = json.begin_object(heap, w);
+    w = json.put_key(heap, w, "openapi");
+    w = json.put_string(heap, w, "3.1.0");
+    w = json.put_key(heap, w, "info");
+    w = json.begin_object(heap, w);
+    w = json.put_key(heap, w, "title");
+    w = json.put_string(heap, w, title);
+    w = json.put_key(heap, w, "version");
+    w = json.put_string(heap, w, version);
+    w = json.end_object(heap, w);
+    w = put_paths(heap, w, api, sc);
+    w = json.put_key(heap, w, "components");
+    w = json.begin_object(heap, w);
+    if has_component(api, "Problem") {
+        w = json.put_key(heap, w, "responses");
+        w = json.put_fragment(heap, w, problem_response_json());
+    }
+    w = json.put_key(heap, w, "schemas");
+    w = json.begin_object(heap, w);
+    var i = 0;
+    while i < vec.size(api.recs) {
+        if rec(api, i, 0) == tag_comp() {
+            w = json.put_key(heap, w, text_of(api, rec(api, i, 1), rec(api, i, 2)));
+            let fragment = schema.json_schema(heap, sc, rec(api, i, 3));
+            borrow fragment as &fb in {
+                w = json.put_fragment(heap, w, buffer.bytes(fb));
+            }
+            buffer.drop(heap, fragment);
+        }
+        i = i + rec_width();
+    }
+    w = json.end_object(heap, w);
+    w = json.end_object(heap, w);
+    w = json.end_object(heap, w);
+    return json.finish(w);
+}

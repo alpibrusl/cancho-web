@@ -57,6 +57,16 @@ jobs:
           SCHEMA_DIR: ${{ github.workspace }}/lexsys-schema
         run: python3 tests/e2e.py
 
+      # `web`'s documents, derived by hand, against what it writes (build/deps was
+      # fetched by the end-to-end run's build), and the sources formatted.
+      - name: web unit tests and formatting
+        working-directory: web
+        env:
+          LEX_SYS: ${{ github.workspace }}/lex-sys/target/release/lex-sys
+        run: |
+          $LEX_SYS test tests/web_test.ls src/web.ls build/deps/*.ls --std
+          $LEX_SYS fmt --check examples src tests
+
       # The Go and C servers the benchmark compares against must still do the
       # same work as the service (the gate `benches/run.sh` runs before timing).
       # The FastAPI half of that gate and the timing are not run here.

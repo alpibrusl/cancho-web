@@ -24,4 +24,4 @@ mkdir -p "$deps" "$(dirname "$out")"
 # two packages that share a dependency write one file, not two.
 "$LEX_SYS" vcs fetch --lock "$here/deps/http-server.lock" --store "$LEX_SYS_DIR/packages/http-server/.lex-sys-vcs" -o "$deps" >/dev/null
 "$LEX_SYS" vcs fetch --lock "$here/deps/schema.lock" --store "$SCHEMA_DIR/.lex-sys-vcs" -o "$deps" >/dev/null
-"$LEX_SYS" build --std "$src" "$deps"/*.ls -o "$out"
+"$LEX_SYS" build --std "$src" "$here"/src/*.ls "$deps"/*.ls -o "$out"
