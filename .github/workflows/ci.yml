@@ -10,7 +10,8 @@ env:
   # that builds them. The locks in deps/ pin source hashes; these pin the
   # repositories (and the compiler, whose bundled `std` no lock records).
   LEX_SYS_REV: bbeb75f6918105db6e49ec7c642f56009a911b8f
-  SCHEMA_REV: 0923bc40fbcbf8777d8bcda3166eac8d043aad96
+  SCHEMA_REV: 10d30edab333e5cfb5445c430020ed1999872e2f
+  PG_REV: 413b2fe160caf07c3d3955081d9b2ef3c0b4cf28
 
 jobs:
   test:
@@ -32,6 +33,12 @@ jobs:
           ref: ${{ env.SCHEMA_REV }}
           path: lexsys-schema
 
+      - uses: actions/checkout@v4
+        with:
+          repository: alpibrusl/lexsys-pg
+          ref: ${{ env.PG_REV }}
+          path: lexsys-pg
+
       - name: Cache the compiler
         id: compiler
         uses: actions/cache@v4
@@ -45,7 +52,17 @@ jobs:
         run: cargo build --release -p lex-sys
 
       - name: Test tooling
-        run: pip install jsonschema openapi-spec-validator schemathesis
+        run: |
+          pip install jsonschema openapi-spec-validator schemathesis
+          which psql || (sudo apt-get update -q && sudo apt-get install -y -q postgresql-client)
+
+      # A PostgreSQL for examples/users_pg (trust authentication: the service logs in with
+      # `-`, and SCRAM is lexsys-pg's own test).
+      - name: PostgreSQL 16
+        run: |
+          docker run -d --name pg -p 5432:5432 -e POSTGRES_HOST_AUTH_METHOD=trust postgres:16 >/dev/null
+          for i in $(seq 1 60); do psql -h 127.0.0.1 -U postgres -Atc 'select 1' >/dev/null 2>&1 && break; sleep 1; done
+          psql -h 127.0.0.1 -U postgres -c 'create database users_pg'
 
       # Real binary, real sockets, a real client; Schemathesis generates its
       # requests from the service's own OpenAPI document.
@@ -56,6 +73,36 @@ jobs:
           LEX_SYS_DIR: ${{ github.workspace }}/lex-sys
           SCHEMA_DIR: ${{ github.workspace }}/lexsys-schema
         run: python3 tests/e2e.py
+
+      # The same tests, the same OpenAPI document (plus the U+0000 pattern) and Schemathesis, with
+      # PostgreSQL as the store.
+      - name: End-to-end tests, users_pg
+        working-directory: web
+        env:
+          LEX_SYS: ${{ github.workspace }}/lex-sys/target/release/lex-sys
+          LEX_SYS_DIR: ${{ github.workspace }}/lex-sys
+          SCHEMA_DIR: ${{ github.workspace }}/lexsys-schema
+          PG_DIR: ${{ github.workspace }}/lexsys-pg
+          USERS_PG: "1"
+          PGHOST: 127.0.0.1
+          PGPORT: "5432"
+          PGUSER: postgres
+          PGDATABASE: users_pg
+        run: python3 tests/e2e.py
+
+      # `examples/users_pg/queries.ls` is what `pgen` writes for `queries.sql` against that schema.
+      - name: The generated queries are the generated queries
+        working-directory: web
+        env:
+          LEX_SYS: ${{ github.workspace }}/lex-sys/target/release/lex-sys
+          PGHOST: 127.0.0.1
+          PGPORT: "5432"
+          PGUSER: postgres
+        run: |
+          psql -d users_pg -q -v ON_ERROR_STOP=1 -f examples/users_pg/schema.sql
+          $LEX_SYS build --std ../lexsys-pg/tools/pgen.ls ../lexsys-pg/src/pg.ls -o /tmp/pgen
+          /tmp/pgen 127.0.0.1 5432 postgres users_pg - examples/users_pg/queries.sql > /tmp/queries.ls
+          diff /tmp/queries.ls examples/users_pg/queries.ls
 
       # `web`'s documents, derived by hand, against what it writes (build/deps was
       # fetched by the end-to-end run's build), and the sources formatted.
