@@ -153,10 +153,10 @@ scripts/build.sh examples/users_pg/users_pg.ls build/users_pg
 build/users_pg 8080 127.0.0.1 5432 postgres users_pg -         # <port> <db host> <db port> <db user> <db> <password|->
 ```
 
-It holds one connection and each request that needs the database blocks the loop for a round trip. Measured
-([`docs/benchmarks.md`](docs/benchmarks.md#on-postgresql)): a read is 10,214 requests a second, 81% of what
-PostgreSQL itself answers over the same protocol and 3.5x lean FastAPI + asyncpg (9.8x FastAPI +
-SQLAlchemy); a write is bound by `fsync` at about 2,700 a second, because one connection cannot group commits.
+It holds one connection and each request that needs the database blocks the loop for a round trip. Each query is prepared once at start-up (`queries.prepare_all`). Measured
+([`docs/benchmarks.md`](docs/benchmarks.md#on-postgresql)): a read is 14,976 requests a second, 5.1x lean
+FastAPI + asyncpg and 13.9x FastAPI + SQLAlchemy, and 61% of what PostgreSQL itself does with the same
+prepared lookup -- the rest is PostgreSQL waiting while the one loop works; a create is 4,404 a second.
 
 ## How it is written
 
