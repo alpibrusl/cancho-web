@@ -920,10 +920,8 @@ fn run_pool[&h, &k, &l](heap: &!h Heap, clock: &k Clock, listener: &!l Listener,
                     if code == 1 {
                         var sent = 0 - 1;
                         borrow next as &nb in {
-                            borrow mut srv as &!sw in {
-                                borrow mut pl as &!qw in {
-                                    sent = pool.submit(qw, server.poller(sw), ticket, buffer.bytes(nb));
-                                }
+                            borrow mut pl as &!qw in {
+                                sent = pool.submit(qw, ticket, buffer.bytes(nb));
                             }
                         }
                         if sent != 0 {
@@ -1002,10 +1000,8 @@ fn run_pool[&h, &k, &l](heap: &!h Heap, clock: &k Clock, listener: &!l Listener,
                             }
                             var sent = 0 - 1;
                             borrow request as &qb in {
-                                borrow mut srv as &!sw in {
-                                    borrow mut pl as &!qw in {
-                                        sent = pool.submit(qw, server.poller(sw), held, buffer.bytes(qb));
-                                    }
+                                borrow mut pl as &!qw in {
+                                    sent = pool.submit(qw, held, buffer.bytes(qb));
                                 }
                             }
                             if sent != 0 {
@@ -1019,6 +1015,12 @@ fn run_pool[&h, &k, &l](heap: &!h Heap, clock: &k Clock, listener: &!l Listener,
                             }
                         }
                         buffer.drop(heap, request);
+                    }
+                }
+                // what this turn queued goes out in one write per connection
+                borrow mut srv as &!sw in {
+                    borrow mut pl as &!qw in {
+                        pool.flush(qw, server.poller(sw));
                     }
                 }
             }
