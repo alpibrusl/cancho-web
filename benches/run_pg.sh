@@ -27,11 +27,13 @@ export PGHOST=${PGHOST:-127.0.0.1} PGPORT=${PGPORT:-5432} PGUSER=${PGUSER:-postg
 # Pin the postmaster, and so every backend it forks, to one core.
 for p in $(pgrep -x postgres); do taskset -a -p -c "$pg_core" "$p" >/dev/null 2>&1 || true; done
 
-NAMES=("lex-sys users_pg (1 connection, blocking)" "FastAPI + SQLAlchemy 2 async + asyncpg (pool 10)" "FastAPI + asyncpg (pool 10, lean)")
+NAMES=("lex-sys users_pg (1 connection, blocking)" "FastAPI + SQLAlchemy 2 async + asyncpg (pool 10)" "FastAPI + asyncpg (pool 10, lean)" "lex-sys users_pg, parsing every query (before)")
 FA="python3 -m uvicorn app:app --port \$PORT --loop uvloop --http httptools"
-CMDS=("$here/build/users_pg \$PORT $PGHOST $PGPORT $PGUSER \$DB -" "cd $here/benches/fastapi_users_pg && $FA" "cd $here/benches/fastapi_users_pg && LEAN=1 $FA")
-LEX=0; ORM=1; LEAN=2
+CMDS=("$here/build/users_pg \$PORT $PGHOST $PGPORT $PGUSER \$DB -" "cd $here/benches/fastapi_users_pg && $FA" "cd $here/benches/fastapi_users_pg && LEAN=1 $FA" "${UNPREPARED_BIN:-/nonexistent} \$PORT $PGHOST $PGPORT $PGUSER \$DB -")
+LEX=0; ORM=1; LEAN=2; UNPREP=3
+# UNPREPARED_BIN=build/users_pg_unprepared adds the build that sends Parse on every call, for a before and after.
 only=${ONLY:-"$LEX $ORM $LEAN"}   # ONLY=2 times one server (no equivalence run)
+[ -z "${ONLY:-}" ] && [ -n "${UNPREPARED_BIN:-}" ] && only="$LEX $UNPREP $ORM $LEAN"
 
 BODY='{"name":"Ada Lovelace","email":"ada@example.org","age":36,"role":"admin","tags":["math","code"]}'
 BAD='{"name":""}'
@@ -69,7 +71,7 @@ load() { settle; taskset -c 2,3 "$kload" "$port" 2 16 "$secs" "$@"; }
 if [ -z "${ONLY:-}" ]; then
   echo "== equivalence (the 16 requests; lex-sys users_pg, FastAPI + SQLAlchemy, FastAPI + asyncpg)"
   declare -a PIDS PORTS
-  for i in $LEX $ORM $LEAN; do start $i; PIDS+=("$PID"); PORTS+=("$port"); done
+  for i in $only; do start $i; PIDS+=("$PID"); PORTS+=("$port"); done
   set +e
   python3 "$here/benches/equivalent.py" "${PORTS[@]}"; eq=$?
   for p in "${PIDS[@]}"; do PID=$p; stop; done
