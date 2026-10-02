@@ -52,6 +52,13 @@ The real binary on a real socket, a real HTTP client, and:
 `heap`, `net_in`, `poll` and the console's error stream -- **no `ffi`, no
 filesystem**.
 
+## Measured
+
+Against the same API in FastAPI (equivalence-checked first), on one core each:
+about **23x** the requests a second on a read, **9x** on a page, **16x** on a create, and a
+p99 of 0.36 ms against 14 ms. [`docs/benchmarks.md`](docs/benchmarks.md) has the table, the
+method, and why to read the ratios rather than the absolute figures.
+
 ## Licence
 
 [EUPL-1.2](LICENSE).
