@@ -18,27 +18,61 @@ names exactly what it can do, and C is not on the list.
 > Extracting the layer that removes it is what [`docs/design.md`](docs/design.md) plans, and
 > the example is what it will be extracted *from*.
 
-## Try it
+## Quick start
 
-You need the `lex-sys` compiler (Rust; the toolchain is pinned by its `rust-toolchain.toml`)
-and this repository's two packages checked out beside it:
+**1. Get the compiler and the two packages**, at the revisions CI builds and tests against
+(Rust; the toolchain is pinned by `lex-sys`'s `rust-toolchain.toml`. A package store records no
+hash of the `std` it was published with, so the compiler revision is part of the contract):
 
 ```
 git clone https://github.com/alpibrusl/lex-sys
 git clone https://github.com/alpibrusl/lexsys-schema
-git clone https://github.com/alpibrusl/lexsys-web && cd lexsys-web
-(cd ../lex-sys && git checkout 232a59c8451aa7df0b72ab0d0ee053b26a951e86 && cargo build --release -p lex-sys)
-export LEX_SYS=$PWD/../lex-sys/target/release/lex-sys
-
-scripts/build.sh examples/users/users.ls build/users      # fetches + verifies both packages
-build/users 8080
+git clone https://github.com/alpibrusl/lexsys-web
+(cd lex-sys && git checkout bbeb75f6918105db6e49ec7c642f56009a911b8f && cargo build --release -p lex-sys)
+(cd lexsys-schema && git checkout 0923bc40fbcbf8777d8bcda3166eac8d043aad96)
+export LEX_SYS=$PWD/lex-sys/target/release/lex-sys
+cd lexsys-web
 ```
 
-(`232a59c` is the revision CI builds and tests against: a package store records no hash of the
-`std` it was published with, so the compiler version is part of the contract.)
+**2. Build and run the example** (the two packages are fetched and verified against
+`deps/*.lock` -- by hash -- every time, never taken from a copy checked in here):
+
+```
+scripts/build.sh examples/users/users.ls build/users
+build/users 8080 &
+```
+
+**3. Use it:**
+
+```
+$ curl -s -XPOST -H 'Content-Type: application/json' -d '{"name":"Ada","age":36}' localhost:8080/users
+{"id":1,"name":"Ada","age":36}
+
+$ curl -s -XPOST -H 'Content-Type: application/json' -d '{"name":"","age":151}' localhost:8080/users
+{"type":"about:blank","title":"Unprocessable Content","status":422,"count":2,"errors":[{"pointer":"/name","code":"min_length","detail":"is too short"},{"pointer":"/age","code":"maximum","detail":"is above the maximum"}]}
+
+$ curl -s 'localhost:8080/users?limit=5'
+{"total":1,"items":[{"id":1,"name":"Ada","age":36}]}
+
+$ curl -s localhost:8080/openapi.json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["openapi"], sorted(d["paths"]))'
+3.1.0 ['/health', '/users', '/users/{id}']
+```
+
+Every error at once, each with its JSON Pointer, as RFC 9457 `problem+json`; and an OpenAPI
+3.1 document generated from the same schema nodes the validator runs. [A session](#a-session)
+below has the rest (`Location`, `204`, `404`, `415`, paging).
+
+**4. Check it works on your machine:**
+
+```
+pip install jsonschema openapi-spec-validator schemathesis
+python3 tests/e2e.py            # 26 tests over real sockets, Schemathesis included, ~25 s
+benches/check.sh                # the Go and C comparison servers still do the same work
+```
+
 `scripts/build.sh` looks for `lex-sys` on `PATH` (or `LEX_SYS=`) and for the checkouts at
-`../lex-sys` and `../lexsys-schema` (or `LEX_SYS_DIR=`, `SCHEMA_DIR=`). `deps/*.lock` pin the
-packages by hash; `vcs fetch` refuses a store that no longer matches.
+`../lex-sys` and `../lexsys-schema` (or `LEX_SYS_DIR=`, `SCHEMA_DIR=`), which is why step 1
+clones them beside this one.
 
 ## A session
 
@@ -147,7 +181,7 @@ while true {
 ## Tests
 
 ```
-python3 tests/e2e.py              # 25 tests; builds first       (pip install jsonschema openapi-spec-validator schemathesis)
+python3 tests/e2e.py              # 26 tests; builds first       (pip install jsonschema openapi-spec-validator schemathesis)
 EXAMPLES=500 python3 tests/e2e.py # more generated requests
 ```
 
