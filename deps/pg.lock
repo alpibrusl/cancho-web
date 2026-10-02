@@ -10,6 +10,11 @@
       "stage_id": "468e480714a7b8f7f7bdcfbf1b5c0b96cb89a7f317b4feb337e6c792725e0faf",
       "source_hash": "f0c40ed32e07d9a2285c1b448fea2c087d80f9928154e4df975b3394a61ce015"
     },
+    "bind_named": {
+      "sig_id": "f3f277a63d71958b0afd2f435c04776f7036d2367c98a8aff3cf22aca18c196d",
+      "stage_id": "b2f91c0f86503d63c124c2d3c87df3e3cfe86b8fbb1db00dd2671d3e4f62266b",
+      "source_hash": "f0c40ed32e07d9a2285c1b448fea2c087d80f9928154e4df975b3394a61ce015"
+    },
     "bool_text": {
       "sig_id": "ce4fba7215a9413197bbbaae60ec90482c4fd6b7d6e82b396c14242854bf01a1",
       "stage_id": "ef37536a6d87bda89bd78b9618f9f648fcc0f6873c3e180d26e98ea48883ea43",
@@ -18,6 +23,11 @@
     "drop_params": {
       "sig_id": "25004045a1bd31549e60d36d515b2f912fb43c0ee518012905705df4dc62581a",
       "stage_id": "708d7cdb033d40b5077ee59b8d77925af0cce242a06d8d709a53fc0c19e54de7",
+      "source_hash": "f0c40ed32e07d9a2285c1b448fea2c087d80f9928154e4df975b3394a61ce015"
+    },
+    "error_field": {
+      "sig_id": "ea307f2d92a3231233852da451881458b76e7951745b973cb8f481d016b3d1e1",
+      "stage_id": "c49459aba66ca823337f592feef998ab5437862654622c6a05c52ed6c37d37ec",
       "source_hash": "f0c40ed32e07d9a2285c1b448fea2c087d80f9928154e4df975b3394a61ce015"
     },
     "failure": {
@@ -75,9 +85,19 @@
       "stage_id": "94c96c9171d262dc789384f72097e3fc1879126f35882ff69aa9d79675f954d5",
       "source_hash": "f0c40ed32e07d9a2285c1b448fea2c087d80f9928154e4df975b3394a61ce015"
     },
+    "receive": {
+      "sig_id": "cea3de61e925770472355eae8e33bee6865c3f153354f7e1af79247a3deacdfd",
+      "stage_id": "ccd32f971c538d2541198a8afc312578737fd690cd3ca661f95678fb0164d039",
+      "source_hash": "f0c40ed32e07d9a2285c1b448fea2c087d80f9928154e4df975b3394a61ce015"
+    },
     "run_named": {
       "sig_id": "dbafdfe94f5c2594de87eae579c811a8f0d9a28c95135c60f77ab4b60e01edf5",
       "stage_id": "53d3e8df36ae44cc9c81bd6eb450826b85443a6f3cca0d9bff0907cff772610b",
+      "source_hash": "f0c40ed32e07d9a2285c1b448fea2c087d80f9928154e4df975b3394a61ce015"
+    },
+    "send": {
+      "sig_id": "024a0364ac9e019b1836bf55327f0e199dfade1edfcfb3a570871c7640035593",
+      "stage_id": "6ba2b1bc319696d232b2c1f328220db6f26b3df927bdd9da454e5267b08a25cd",
       "source_hash": "f0c40ed32e07d9a2285c1b448fea2c087d80f9928154e4df975b3394a61ce015"
     },
     "value": {

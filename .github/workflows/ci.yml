@@ -9,9 +9,9 @@ env:
   # The two sibling checkouts the build reads packages from, and the compiler
   # that builds them. The locks in deps/ pin source hashes; these pin the
   # repositories (and the compiler, whose bundled `std` no lock records).
-  LEX_SYS_REV: bbeb75f6918105db6e49ec7c642f56009a911b8f
+  LEX_SYS_REV: 0a2a43c92729b4126d710e66dc61c64a548fe527
   SCHEMA_REV: 10d30edab333e5cfb5445c430020ed1999872e2f
-  PG_REV: 856b36f1da22c83d974302de163ec261e14ce247
+  PG_REV: fcf48a1adab1e7a089604d3864e0ed7d37da67c0
 
 jobs:
   test:
@@ -84,6 +84,24 @@ jobs:
           SCHEMA_DIR: ${{ github.workspace }}/lexsys-schema
           PG_DIR: ${{ github.workspace }}/lexsys-pg
           USERS_PG: "1"
+          PGHOST: 127.0.0.1
+          PGPORT: "5432"
+          PGUSER: postgres
+          PGDATABASE: users_pg
+        run: python3 tests/e2e.py
+
+      # The same again with a pool of database connections: a request that needs the database is held
+      # while its query is queued, and the loop goes on (`http.server`'s `hold`/`answer`, `pg.pool`).
+      # NonBlocking's own tests run in both runs; here the whole suite is the pooled service's.
+      - name: End-to-end tests, users_pg with a pool
+        working-directory: web
+        env:
+          LEX_SYS: ${{ github.workspace }}/lex-sys/target/release/lex-sys
+          LEX_SYS_DIR: ${{ github.workspace }}/lex-sys
+          SCHEMA_DIR: ${{ github.workspace }}/lexsys-schema
+          PG_DIR: ${{ github.workspace }}/lexsys-pg
+          USERS_PG: "1"
+          USERS_PG_POOL: "2"
           PGHOST: 127.0.0.1
           PGPORT: "5432"
           PGUSER: postgres
