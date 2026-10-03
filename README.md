@@ -1,5 +1,7 @@
 # lexsys-web
 
+[![ci](https://github.com/alpibrusl/lexsys-web/actions/workflows/ci.yml/badge.svg)](https://github.com/alpibrusl/lexsys-web/actions/workflows/ci.yml)
+
 A web layer for [lex-sys](https://github.com/alpibrusl/lex-sys), a typed systems language
 with linear ownership and capability effects: routes with typed parameters, request bodies
 validated by [`lexsys-schema`](https://github.com/alpibrusl/lexsys-schema), `problem+json`
@@ -9,31 +11,40 @@ errors, and an OpenAPI document generated from the same declarations -- on top o
 One thread, a `Poller`, no `Ffi`, no `extern fn`: the compiled server's authority report
 names exactly what it can do, and C is not on the list.
 
-> **Status: the declaration half of the framework is built.**
-> [`examples/users`](examples/users/users.ls) is a CRUD JSON API over `http.server` and
-> `lexsys-schema`, held to its own OpenAPI document by an end-to-end test over real sockets
-> and by Schemathesis, and benchmarked against FastAPI, Go and C ([below](#measured)).
-> [`src/web.ls`](src/web.ls) declares each operation once -- its route, parameters, body and
-> responses -- and the router and the OpenAPI document both come from that declaration
-> (the document is checked in as [`examples/users/openapi.json`](examples/users/openapi.json),
-> so a change to the API is a change to a file). Not yet: dispatch -- the handler is still an
-> `if` on the route id and still checks its own path and query parameters -- and middleware
-> ([`docs/design.md`](docs/design.md) §8 says what is next and why).
+## Status
+
+**The declaration half of the framework is built.**
+[`examples/users`](examples/users/users.ls) is a CRUD JSON API over `http.server` and
+`lexsys-schema`, held to its own OpenAPI document by an end-to-end test over real sockets
+and by Schemathesis, and benchmarked against FastAPI, Go and C ([below](#benchmarks)).
+[`src/web.ls`](src/web.ls) declares each operation once -- its route, parameters, body and
+responses -- and the router and the OpenAPI document both come from that declaration
+(the document is checked in as [`examples/users/openapi.json`](examples/users/openapi.json),
+so a change to the API is a change to a file). Not yet: dispatch -- the handler is still an
+`if` on the route id and still checks its own path and query parameters -- and middleware
+([`docs/design.md`](docs/design.md) §8 says what is next and why).
+
+## Requirements
+
+- The **lex-sys** compiler and checkouts of **lexsys-schema** (and, for the PostgreSQL example, **lexsys-pg**), at the revisions
+  this repository's CI builds with (below). A package store records no hash of the `std` it was published with, so the compiler
+  revision is part of the contract.
+- Rust, to build that compiler (its `rust-toolchain.toml` pins the toolchain).
+- To run the tests: `python3` and `pip install jsonschema openapi-spec-validator schemathesis`.
 
 ## Quick start
 
-**1. Get the compiler and the two packages**, at the revisions CI builds and tests against
-(Rust; the toolchain is pinned by `lex-sys`'s `rust-toolchain.toml`. A package store records no
-hash of the `std` it was published with, so the compiler revision is part of the contract):
+**1. Get the compiler and the two packages**, at the revisions CI builds and tests against (read from `ci.yml`, so this text
+cannot drift from it):
 
 ```
 git clone https://github.com/alpibrusl/lex-sys
 git clone https://github.com/alpibrusl/lexsys-schema
-git clone https://github.com/alpibrusl/lexsys-web
-(cd lex-sys && git checkout bbeb75f6918105db6e49ec7c642f56009a911b8f && cargo build --release -p lex-sys)
-(cd lexsys-schema && git checkout 0923bc40fbcbf8777d8bcda3166eac8d043aad96)
-export LEX_SYS=$PWD/lex-sys/target/release/lex-sys
-cd lexsys-web
+git clone https://github.com/alpibrusl/lexsys-web && cd lexsys-web
+pin() { sed -n "s/^ *$1: *//p" .github/workflows/ci.yml; }
+(cd ../lex-sys && git checkout "$(pin LEX_SYS_REV)" && cargo build --release -p lex-sys)
+(cd ../lexsys-schema && git checkout "$(pin SCHEMA_REV)")
+export LEX_SYS=$PWD/../lex-sys/target/release/lex-sys
 ```
 
 **2. Build and run the example** (the two packages are fetched and verified against
@@ -76,7 +87,12 @@ benches/check.sh                # the Go and C comparison servers still do the s
 `../lex-sys` and `../lexsys-schema` (or `LEX_SYS_DIR=`, `SCHEMA_DIR=`), which is why step 1
 clones them beside this one.
 
-## A session
+## Examples
+
+Three runnable services, all held to their own OpenAPI document by the end-to-end tests: `examples/users` (the CRUD API below),
+`examples/users_pg` (the same API on PostgreSQL) and `examples/users_threads` (the same loop in two threads of one process).
+
+### A session
 
 Every response below is real output of the built service.
 
@@ -136,7 +152,7 @@ HTTP/1.1 422 Unprocessable Content
 Storage is in memory, up to 100,000 users or 64 MiB (past that a `POST` is a 503); a delete
 leaves a hole, ids are not reused.
 
-### The same API on PostgreSQL
+#### The same API on PostgreSQL
 
 [`examples/users_pg`](examples/users_pg/users_pg.ls) is this service with a table behind it: the same routes,
 the same schema nodes, the same OpenAPI document (plus a `pattern` on `name` and `email`, which refuse
@@ -172,7 +188,7 @@ second with one connection (the blocking service: 15,638; three copies: 25,180) 
 [`docs/benchmarks.md`](docs/benchmarks.md#a-pool-in-one-process) has the setup, the ranges and what it does not
 do. The same 29 tests pass against both, plus 6 for the pool (`USERS_PG_POOL=2 USERS_PG=1 python3 tests/e2e.py`).
 
-## How it is written
+## Usage
 
 The shape is declared once, as data (`setup` in [`users.ls`](examples/users/users.ls)); the
 same nodes validate a body *and* appear in `/openapi.json`:
@@ -248,7 +264,7 @@ benches/check.sh                  # the Go and C implementations still do the sa
 CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) builds the pinned compiler and
 runs the end-to-end tests, Schemathesis included, and `benches/check.sh` on every push.
 
-## Measured
+## Benchmarks
 
 On one core each, every implementation checked to do the same work first
 ([`docs/benchmarks.md`](docs/benchmarks.md) has the tables, the method, and what each
@@ -286,12 +302,24 @@ docs/design.md            what the framework layer will be, and what building th
 docs/benchmarks.md        the method, the numbers, and how to read them
 ```
 
-## Not yet
+## Limitations
+
+Not yet built:
 
 Dispatch and parameter validation by construction (a path or query parameter that fails its
 schema is still a check the handler makes); middleware, auth, and anything like FastAPI's
 dependency injection; TLS; streaming bodies; more than one core; `$ref`/`$defs` in the generated
 JSON Schema. The design document says which of these are decided and which are open.
+
+## Documentation
+
+- [`docs/design.md`](docs/design.md): what the framework layer will be, and what building the example found.
+- [`docs/benchmarks.md`](docs/benchmarks.md): the method, the numbers, and how to read them.
+
+## Contributing
+
+Every change goes through what CI runs: the end-to-end tests (Schemathesis included) and `benches/check.sh`. Design before code, in
+`docs/`, with claims measured; a claim that turns out false is corrected in place.
 
 ## Licence
 
