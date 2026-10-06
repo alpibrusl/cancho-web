@@ -136,3 +136,95 @@ fn test_security_schemes_alternatives_defaults_and_the_error_response[&h](heap: 
     schema.drop(heap, s2);
     return 0;
 }
+
+// Words and the rest of what a real API has: a summary and a description of an operation, a header
+// parameter, descriptions of parameters (the path's, which is written once, and a header's), a plain-text
+// response, and the document's own description (an empty summary is left out).
+fn test_words_header_parameters_and_plain_text[&h](heap: &!h Heap) -> [heap] int {
+    var s = schema.empty(heap);
+    let (s1, key) = schema.new_string(heap, s, 1, 255);
+    let (s2, page) = schema.new_int(heap, s1, 0, 9);
+    let (s3, id) = schema.new_int(heap, s2, 1, 99);
+    var api = web.empty(heap);
+    api = web.about(heap, api, "", "Only a description.");
+    let (a1, post) = web.operation(heap, api, "POST", "/e", "post");
+    api = web.summary(heap, a1, post, "Post it");
+    api = web.describe(heap, api, post, "More.");
+    api = web.header_param(heap, api, post, "Idempotency-Key", key, false);
+    api = web.describe_param(heap, api, post, "Idempotency-Key", "A key.");
+    api = web.query_param(heap, api, post, "page", page, false);
+    api = web.respond_text(heap, api, post, 200, "text");
+    let (a2, get) = web.operation(heap, api, "GET", "/f/:id", "f");
+    api = web.path_param(heap, a2, get, "id", id);
+    api = web.describe_param(heap, api, get, "id", "The id.");
+    api = web.respond_empty(heap, api, get, 200, "ok");
+    borrow api as &ar in {
+        borrow s3 as &sr in {
+            document_is(heap, ar, sr, "{\"openapi\":\"3.1.0\",\"info\":{\"title\":\"T\",\"version\":\"1\",\"description\":\"Only a description.\"},\"paths\":{\"/e\":{\"post\":{\"operationId\":\"post\",\"summary\":\"Post it\",\"description\":\"More.\",\"parameters\":[{\"name\":\"Idempotency-Key\",\"in\":\"header\",\"required\":false,\"description\":\"A key.\",\"schema\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":255}},{\"name\":\"page\",\"in\":\"query\",\"required\":false,\"schema\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":9}}],\"responses\":{\"200\":{\"description\":\"text\",\"content\":{\"text/plain\":{\"schema\":{\"type\":\"string\"}}}}}}},\"/f/{id}\":{\"parameters\":[{\"name\":\"id\",\"in\":\"path\",\"required\":true,\"description\":\"The id.\",\"schema\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":99}}],\"get\":{\"operationId\":\"f\",\"responses\":{\"200\":{\"description\":\"ok\"}}}}},\"components\":{\"schemas\":{}}}");
+        }
+    }
+    web.drop(heap, api);
+    schema.drop(heap, s3);
+    return 0;
+}
+
+// A request body that may be left out says `required: false`.
+fn test_an_optional_body[&h](heap: &!h Heap) -> [heap] int {
+    let (s, name) = schema.new_string(heap, schema.empty(heap), 1, 8);
+    var api = web.empty(heap);
+    let (a1, op) = web.operation(heap, api, "POST", "/p", "p");
+    api = web.optional_body(heap, a1, op, name);
+    api = web.respond_empty(heap, api, op, 204, "done");
+    borrow api as &ar in {
+        borrow s as &sr in {
+            document_is(heap, ar, sr, "{\"openapi\":\"3.1.0\",\"info\":{\"title\":\"T\",\"version\":\"1\"},\"paths\":{\"/p\":{\"post\":{\"operationId\":\"p\",\"requestBody\":{\"required\":false,\"content\":{\"application/json\":{\"schema\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":8}}}},\"responses\":{\"204\":{\"description\":\"done\"}}}}},\"components\":{\"schemas\":{}}}");
+        }
+    }
+    web.drop(heap, api);
+    schema.drop(heap, s);
+    return 0;
+}
+
+// Asking the declaration who may call an operation: the alternatives it declared, in order; the document's default when it declared none; nothing
+// for an open one, for an operation that does not exist, or when neither it nor the document says anything.
+fn test_asking_who_may_call[&h](heap: &!h Heap) -> [heap] int {
+    var api = web.empty(heap);
+    api = web.bearer_scheme(heap, api, "ingest", "");
+    api = web.bearer_scheme(heap, api, "admin", "");
+    api = web.default_require(heap, api, "admin");
+    let (a1, post) = web.operation(heap, api, "POST", "/e", "post");
+    api = web.require(heap, a1, post, "ingest");
+    api = web.require(heap, api, post, "admin");
+    let (a2, health) = web.operation(heap, api, "GET", "/h", "health");
+    api = web.no_auth(heap, a2, health);
+    let (a3, x) = web.operation(heap, api, "GET", "/x", "x");
+    api = a3;
+    borrow api as &ar in {
+        test.assert_eq(web.requirements(ar, post), 2);
+        test.assert(bytes.equal(web.requirement(ar, post, 0), "ingest"));
+        test.assert(bytes.equal(web.requirement(ar, post, 1), "admin"));
+        test.assert_eq(len(web.requirement(ar, post, 2)), 0);
+        test.assert(!web.is_open(ar, post));
+        test.assert(web.is_open(ar, health));
+        test.assert_eq(web.requirements(ar, health), 0);
+        test.assert_eq(len(web.requirement(ar, health, 0)), 0);
+        test.assert(!web.is_open(ar, x));
+        test.assert_eq(web.requirements(ar, x), 1);
+        test.assert(bytes.equal(web.requirement(ar, x, 0), "admin"));
+        test.assert_eq(web.requirements(ar, 0), 0);
+        test.assert_eq(web.requirements(ar, 4), 0);
+        test.assert_eq(len(web.requirement(ar, 4, 0)), 0);
+        test.assert_eq(len(web.requirement(ar, post, 0 - 1)), 0);
+    }
+    web.drop(heap, api);
+    // no default and no call: nothing is said, and it is not "open"
+    var bare = web.empty(heap);
+    let (b1, y) = web.operation(heap, bare, "GET", "/y", "y");
+    bare = b1;
+    borrow bare as &br in {
+        test.assert_eq(web.requirements(br, y), 0);
+        test.assert(!web.is_open(br, y));
+    }
+    web.drop(heap, bare);
+    return 0;
+}

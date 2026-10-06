@@ -9,7 +9,7 @@ env:
   # The two sibling checkouts the build reads packages from, and the compiler
   # that builds them. The locks in deps/ pin source hashes; these pin the
   # repositories (and the compiler, whose bundled `std` no lock records).
-  LEX_SYS_REV: 0a2a43c92729b4126d710e66dc61c64a548fe527
+  LEX_SYS_REV: d7228ca75604b5c27130485b95371a2e16109fef
   SCHEMA_REV: 10d30edab333e5cfb5445c430020ed1999872e2f
   PG_REV: c5ef36c07c7057f230fc5f41cbeffcc370a79b60
 
@@ -131,6 +131,13 @@ jobs:
         run: |
           $LEX_SYS test tests/web_test.ls src/web.ls build/deps/*.ls --std
           $LEX_SYS fmt --check examples src tests
+
+      # `web` as a package: the committed store is what `src/web.ls` publishes.
+      - name: The package store is the published source
+        working-directory: web
+        env:
+          LEX_SYS: ${{ github.workspace }}/lex-sys/target/release/lex-sys
+        run: scripts/publish.sh --check
 
       # The Go and C servers the benchmark compares against must still do the
       # same work as the service (the gate `benches/run.sh` runs before timing).
