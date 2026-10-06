@@ -225,6 +225,16 @@ then `web.require(heap, api, op, "admin")` once for each token that will do (alt
 An API whose errors are not `problem+json` names its error schema `Error` and answers with
 `web.respond_error(heap, api, op, 404, "no such user")`.
 
+A request header is `web.header_param(heap, api, op, "Idempotency-Key", node, false)`; a plain-text answer is
+`web.respond_text`; words are `web.summary`, `web.describe` (an operation), `web.describe_param` (a parameter by
+name) and `web.about` (the document). None of them changes what is routed.
+
+`web` is also a package, so a project does not copy it: `scripts/publish.sh` writes the store
+[`.lex-sys-vcs`](.lex-sys-vcs) from `src/web.ls`, with `lexsys-schema` recorded as its requirement, and a project's
+`lex-sys.toml` names it (`[dependencies.web]`, `git`, a `rev` that has the store, `path = ".lex-sys-vcs"`; the project
+names `lexsys-schema` too, to import it). CI checks that the committed store is what the source publishes
+(`scripts/publish.sh --check`).
+
 The loop is the application's own: `wait` does the I/O once, `next` hands over one parsed
 request, the handler builds its answer, `respond` sends it. That inversion (instead of a
 callback) is forced by the region system -- `lex-sys`'s `docs/http-server.md` §2 -- and is why

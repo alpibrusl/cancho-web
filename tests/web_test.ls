@@ -136,3 +136,34 @@ fn test_security_schemes_alternatives_defaults_and_the_error_response[&h](heap: 
     schema.drop(heap, s2);
     return 0;
 }
+
+// Words and the rest of what a real API has: a summary and a description of an operation, a header
+// parameter, descriptions of parameters (the path's, which is written once, and a header's), a plain-text
+// response, and the document's own description (an empty summary is left out).
+fn test_words_header_parameters_and_plain_text[&h](heap: &!h Heap) -> [heap] int {
+    var s = schema.empty(heap);
+    let (s1, key) = schema.new_string(heap, s, 1, 255);
+    let (s2, page) = schema.new_int(heap, s1, 0, 9);
+    let (s3, id) = schema.new_int(heap, s2, 1, 99);
+    var api = web.empty(heap);
+    api = web.about(heap, api, "", "Only a description.");
+    let (a1, post) = web.operation(heap, api, "POST", "/e", "post");
+    api = web.summary(heap, a1, post, "Post it");
+    api = web.describe(heap, api, post, "More.");
+    api = web.header_param(heap, api, post, "Idempotency-Key", key, false);
+    api = web.describe_param(heap, api, post, "Idempotency-Key", "A key.");
+    api = web.query_param(heap, api, post, "page", page, false);
+    api = web.respond_text(heap, api, post, 200, "text");
+    let (a2, get) = web.operation(heap, api, "GET", "/f/:id", "f");
+    api = web.path_param(heap, a2, get, "id", id);
+    api = web.describe_param(heap, api, get, "id", "The id.");
+    api = web.respond_empty(heap, api, get, 200, "ok");
+    borrow api as &ar in {
+        borrow s3 as &sr in {
+            document_is(heap, ar, sr, "{\"openapi\":\"3.1.0\",\"info\":{\"title\":\"T\",\"version\":\"1\",\"description\":\"Only a description.\"},\"paths\":{\"/e\":{\"post\":{\"operationId\":\"post\",\"summary\":\"Post it\",\"description\":\"More.\",\"parameters\":[{\"name\":\"Idempotency-Key\",\"in\":\"header\",\"required\":false,\"description\":\"A key.\",\"schema\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":255}},{\"name\":\"page\",\"in\":\"query\",\"required\":false,\"schema\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":9}}],\"responses\":{\"200\":{\"description\":\"text\",\"content\":{\"text/plain\":{\"schema\":{\"type\":\"string\"}}}}}}},\"/f/{id}\":{\"parameters\":[{\"name\":\"id\",\"in\":\"path\",\"required\":true,\"description\":\"The id.\",\"schema\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":99}}],\"get\":{\"operationId\":\"f\",\"responses\":{\"200\":{\"description\":\"ok\"}}}}},\"components\":{\"schemas\":{}}}");
+        }
+    }
+    web.drop(heap, api);
+    schema.drop(heap, s3);
+    return 0;
+}
