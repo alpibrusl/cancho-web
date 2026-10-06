@@ -167,3 +167,20 @@ fn test_words_header_parameters_and_plain_text[&h](heap: &!h Heap) -> [heap] int
     schema.drop(heap, s3);
     return 0;
 }
+
+// A request body that may be left out says `required: false`.
+fn test_an_optional_body[&h](heap: &!h Heap) -> [heap] int {
+    let (s, name) = schema.new_string(heap, schema.empty(heap), 1, 8);
+    var api = web.empty(heap);
+    let (a1, op) = web.operation(heap, api, "POST", "/p", "p");
+    api = web.optional_body(heap, a1, op, name);
+    api = web.respond_empty(heap, api, op, 204, "done");
+    borrow api as &ar in {
+        borrow s as &sr in {
+            document_is(heap, ar, sr, "{\"openapi\":\"3.1.0\",\"info\":{\"title\":\"T\",\"version\":\"1\"},\"paths\":{\"/p\":{\"post\":{\"operationId\":\"p\",\"requestBody\":{\"required\":false,\"content\":{\"application/json\":{\"schema\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":8}}}},\"responses\":{\"204\":{\"description\":\"done\"}}}}},\"components\":{\"schemas\":{}}}");
+        }
+    }
+    web.drop(heap, api);
+    schema.drop(heap, s);
+    return 0;
+}

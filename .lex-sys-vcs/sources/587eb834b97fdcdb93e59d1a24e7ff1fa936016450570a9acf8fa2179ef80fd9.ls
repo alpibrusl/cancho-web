@@ -50,7 +50,7 @@ pub res struct Api {
 //   parameter: 2, op, where (0 path, 1 query), name_off, name_len, node, required, 0
 //   response:  3, op, status, text_off, text_len, node (-1 none, -2 problem), header_off, header_len
 //   component: 4, name_off, name_len, node, 0, 0, 0, 0
-//   body:      5, op, node, 0, 0, 0, 0, 0
+//   body:      5, op, node, optional (1: the body may be left out), 0, 0, 0, 0
 //   scheme:    6, name_off, name_len, kind (0 http bearer), desc_off, desc_len, 0, 0
 //   security:  7, op, name_off, name_len (0: the operation is open), 0, 0, 0, 0
 //   default:   8, name_off, name_len, 0, 0, 0, 0, 0
@@ -280,6 +280,13 @@ pub fn about[&h, &s, &d](heap: &!h Heap, a: Api, summary: &s [byte], description
 pub fn body[&h](heap: &!h Heap, a: Api, op: int, node: int) -> [heap] Api {
     let Api { router, recs, text, ops } = a;
     let rc = put_rec(heap, recs, tag_body(), op, node, 0, 0, 0, 0, 0);
+    return Api { router: router, recs: rc, text: text, ops: ops };
+}
+
+// The request body of `op` may be left out (`required: false`); when there is one it matches `node`.
+pub fn optional_body[&h](heap: &!h Heap, a: Api, op: int, node: int) -> [heap] Api {
+    let Api { router, recs, text, ops } = a;
+    let rc = put_rec(heap, recs, tag_body(), op, node, 1, 0, 0, 0, 0);
     return Api { router: router, recs: rc, text: text, ops: ops };
 }
 
@@ -632,7 +639,7 @@ fn put_operation[&h, &a, &s](heap: &!h Heap, w: json.Writer, api: &a Api, sc: &s
             o = json.put_key(heap, o, "requestBody");
             o = json.begin_object(heap, o);
             o = json.put_key(heap, o, "required");
-            o = json.put_bool(heap, o, true);
+            o = json.put_bool(heap, o, rec(api, i, 3) == 0);
             o = json.put_key(heap, o, "content");
             o = json.begin_object(heap, o);
             o = json.put_key(heap, o, "application/json");

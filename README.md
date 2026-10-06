@@ -226,7 +226,7 @@ An API whose errors are not `problem+json` names its error schema `Error` and an
 `web.respond_error(heap, api, op, 404, "no such user")`.
 
 A request header is `web.header_param(heap, api, op, "Idempotency-Key", node, false)`; a plain-text answer is
-`web.respond_text`; words are `web.summary`, `web.describe` (an operation), `web.describe_param` (a parameter by
+`web.respond_text`; `web.optional_body` is a body that may be left out; words are `web.summary`, `web.describe` (an operation), `web.describe_param` (a parameter by
 name) and `web.about` (the document). None of them changes what is routed.
 
 `web` is also a package, so a project does not copy it: `scripts/publish.sh` writes the store
