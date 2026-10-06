@@ -218,6 +218,13 @@ let id = web.find(api, http.method(request, table), path, params);   // in handl
 if id == 3 { return create(heap, sc, new_user, store, request, table, body, out, keep); }
 ```
 
+Who may call an operation is declared the same way, and only the document is affected (the
+application's own gate still decides): `web.bearer_scheme(heap, api, "admin", "the admin token")`,
+then `web.require(heap, api, op, "admin")` once for each token that will do (alternatives),
+`web.no_auth(heap, api, op)` for an open route, and `web.default_require` for the document's default.
+An API whose errors are not `problem+json` names its error schema `Error` and answers with
+`web.respond_error(heap, api, op, 404, "no such user")`.
+
 The loop is the application's own: `wait` does the I/O once, `next` hands over one parsed
 request, the handler builds its answer, `respond` sends it. That inversion (instead of a
 callback) is forced by the region system -- `lex-sys`'s `docs/http-server.md` §2 -- and is why

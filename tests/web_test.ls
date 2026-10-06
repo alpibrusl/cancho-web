@@ -104,3 +104,35 @@ fn test_query_body_header_internal_routes_and_routing[&h](heap: &!h Heap) -> [he
     schema.drop(heap, s2);
     return 0;
 }
+
+// Who may call: bearer schemes, an operation's alternatives (any one will do), an open
+// operation under a document default, an operation that inherits the default, and the
+// shared error response of an API whose errors are not problem+json. Nothing is written
+// for any of it unless it was declared (the tests above).
+fn test_security_schemes_alternatives_defaults_and_the_error_response[&h](heap: &!h Heap) -> [heap] int {
+    let (s1, flag) = schema.new_bool(heap, schema.empty(heap));
+    let (s2, error) = schema.new_bool(heap, s1);
+    var api = web.empty(heap);
+    api = web.bearer_scheme(heap, api, "ingest", "the ingest token");
+    api = web.bearer_scheme(heap, api, "admin", "");
+    api = web.default_require(heap, api, "admin");
+    let (a1, post) = web.operation(heap, api, "POST", "/e", "post");
+    api = web.require(heap, a1, post, "ingest");
+    api = web.require(heap, api, post, "admin");
+    api = web.respond(heap, api, post, 202, "ok", flag);
+    api = web.respond_error(heap, api, post, 400, "bad");
+    let (a2, health) = web.operation(heap, api, "GET", "/h", "health");
+    api = web.no_auth(heap, a2, health);
+    api = web.respond_empty(heap, api, health, 200, "alive");
+    let (a3, x) = web.operation(heap, api, "GET", "/x", "x");
+    api = web.respond_empty(heap, a3, x, 200, "ok");
+    api = web.component(heap, api, "Error", error);
+    borrow api as &ar in {
+        borrow s2 as &sr in {
+            document_is(heap, ar, sr, "{\"openapi\":\"3.1.0\",\"info\":{\"title\":\"T\",\"version\":\"1\"},\"security\":[{\"admin\":[]}],\"paths\":{\"/e\":{\"post\":{\"operationId\":\"post\",\"security\":[{\"ingest\":[]},{\"admin\":[]}],\"responses\":{\"202\":{\"description\":\"ok\",\"content\":{\"application/json\":{\"schema\":{\"type\":\"boolean\"}}}},\"400\":{\"$ref\":\"#/components/responses/Error\",\"description\":\"bad\"}}}},\"/h\":{\"get\":{\"operationId\":\"health\",\"security\":[],\"responses\":{\"200\":{\"description\":\"alive\"}}}},\"/x\":{\"get\":{\"operationId\":\"x\",\"responses\":{\"200\":{\"description\":\"ok\"}}}}},\"components\":{\"responses\":{\"Error\":{\"description\":\"an error\",\"content\":{\"application/json\":{\"schema\":{\"$ref\":\"#/components/schemas/Error\"}}}}},\"securitySchemes\":{\"ingest\":{\"type\":\"http\",\"scheme\":\"bearer\",\"description\":\"the ingest token\"},\"admin\":{\"type\":\"http\",\"scheme\":\"bearer\"}},\"schemas\":{\"Error\":{\"type\":\"boolean\"}}}}");
+        }
+    }
+    web.drop(heap, api);
+    schema.drop(heap, s2);
+    return 0;
+}
