@@ -225,6 +225,11 @@ then `web.require(heap, api, op, "admin")` once for each token that will do (alt
 An API whose errors are not `problem+json` names its error schema `Error` and answers with
 `web.respond_error(heap, api, op, 404, "no such user")`.
 
+What was declared can be asked back, so that a gate need not keep a second table: `web.requirements(api, op)` is how many alternatives
+`op` has (its own `require` calls, else the document's default; 0 for an open operation, for one that does not exist, and for one about which
+nothing was declared), `web.requirement(api, op, i)` the scheme of the `i`-th (an empty text beyond the last) and `web.is_open(api, op)` whether
+it was declared `no_auth`. A caller needs one of the alternatives. Nothing here checks a token.
+
 A request header is `web.header_param(heap, api, op, "Idempotency-Key", node, false)`; a plain-text answer is
 `web.respond_text`; `web.optional_body` is a body that may be left out; words are `web.summary`, `web.describe` (an operation), `web.describe_param` (a parameter by
 name) and `web.about` (the document). None of them changes what is routed.

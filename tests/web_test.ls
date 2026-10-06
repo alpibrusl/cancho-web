@@ -184,3 +184,47 @@ fn test_an_optional_body[&h](heap: &!h Heap) -> [heap] int {
     schema.drop(heap, s);
     return 0;
 }
+
+// Asking the declaration who may call an operation: the alternatives it declared, in order; the document's default when it declared none; nothing
+// for an open one, for an operation that does not exist, or when neither it nor the document says anything.
+fn test_asking_who_may_call[&h](heap: &!h Heap) -> [heap] int {
+    var api = web.empty(heap);
+    api = web.bearer_scheme(heap, api, "ingest", "");
+    api = web.bearer_scheme(heap, api, "admin", "");
+    api = web.default_require(heap, api, "admin");
+    let (a1, post) = web.operation(heap, api, "POST", "/e", "post");
+    api = web.require(heap, a1, post, "ingest");
+    api = web.require(heap, api, post, "admin");
+    let (a2, health) = web.operation(heap, api, "GET", "/h", "health");
+    api = web.no_auth(heap, a2, health);
+    let (a3, x) = web.operation(heap, api, "GET", "/x", "x");
+    api = a3;
+    borrow api as &ar in {
+        test.assert_eq(web.requirements(ar, post), 2);
+        test.assert(bytes.equal(web.requirement(ar, post, 0), "ingest"));
+        test.assert(bytes.equal(web.requirement(ar, post, 1), "admin"));
+        test.assert_eq(len(web.requirement(ar, post, 2)), 0);
+        test.assert(!web.is_open(ar, post));
+        test.assert(web.is_open(ar, health));
+        test.assert_eq(web.requirements(ar, health), 0);
+        test.assert_eq(len(web.requirement(ar, health, 0)), 0);
+        test.assert(!web.is_open(ar, x));
+        test.assert_eq(web.requirements(ar, x), 1);
+        test.assert(bytes.equal(web.requirement(ar, x, 0), "admin"));
+        test.assert_eq(web.requirements(ar, 0), 0);
+        test.assert_eq(web.requirements(ar, 4), 0);
+        test.assert_eq(len(web.requirement(ar, 4, 0)), 0);
+        test.assert_eq(len(web.requirement(ar, post, 0 - 1)), 0);
+    }
+    web.drop(heap, api);
+    // no default and no call: nothing is said, and it is not "open"
+    var bare = web.empty(heap);
+    let (b1, y) = web.operation(heap, bare, "GET", "/y", "y");
+    bare = b1;
+    borrow bare as &br in {
+        test.assert_eq(web.requirements(br, y), 0);
+        test.assert(!web.is_open(br, y));
+    }
+    web.drop(heap, bare);
+    return 0;
+}

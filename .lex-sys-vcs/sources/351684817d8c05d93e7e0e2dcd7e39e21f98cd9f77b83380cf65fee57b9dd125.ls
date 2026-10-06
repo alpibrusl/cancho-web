@@ -397,6 +397,96 @@ pub fn default_require[&h, &n](heap: &!h Heap, a: Api, scheme: &n [byte]) -> [he
 }
 
 // ---------------------------------------------------------------------
+// Asking who may call (read back from the declaration)
+// ---------------------------------------------------------------------
+
+// Whether `op` was declared open (`no_auth`), whatever the document's default says.
+pub fn is_open[&a](api: &a Api, op: int) -> [] bool {
+    var i = 0;
+    while i < vec.size(api.recs) {
+        if rec(api, i, 0) == tag_sec() && rec(api, i, 1) == op && rec(api, i, 3) == 0 {
+            return true;
+        }
+        i = i + rec_width();
+    }
+    return false;
+}
+
+fn own_alternatives[&a](api: &a Api, op: int) -> [] int {
+    var n = 0;
+    var i = 0;
+    while i < vec.size(api.recs) {
+        if rec(api, i, 0) == tag_sec() && rec(api, i, 1) == op && rec(api, i, 3) > 0 {
+            n = n + 1;
+        }
+        i = i + rec_width();
+    }
+    return n;
+}
+
+fn default_alternatives[&a](api: &a Api) -> [] int {
+    var n = 0;
+    var i = 0;
+    while i < vec.size(api.recs) {
+        if rec(api, i, 0) == tag_default() {
+            n = n + 1;
+        }
+        i = i + rec_width();
+    }
+    return n;
+}
+
+// How many alternatives `op` has, as the document writes them: its own `require` calls, or, if it made none, the document's
+// `default_require` calls. 0: nothing is declared for it (and `is_open` is false unless it was declared open: an operation that is not
+// open and has no alternative is one the document says nothing about, which a gate should not read as open). An operation that does not
+// exist has 0.
+pub fn requirements[&a](api: &a Api, op: int) -> [] int {
+    if op < 1 || op > api.ops || is_open(api, op) {
+        return 0;
+    }
+    let own = own_alternatives(api, op);
+    if own > 0 {
+        return own;
+    }
+    return default_alternatives(api);
+}
+
+// The scheme of the `i`-th alternative of `op` (0-based, in the order declared), or an empty text if there is none. A caller needs ONE of
+// the alternatives. The text is the scheme's name as `bearer_scheme` was given it (`"admin"`).
+pub fn requirement[&a](api: &a Api, op: int, i: int) -> [] &a [byte] {
+    var seen = 0;
+    var j = 0;
+    if op < 1 || op > api.ops || i < 0 {
+        return text_of(api, 0, 0);
+    }
+    if own_alternatives(api, op) > 0 && !is_open(api, op) {
+        while j < vec.size(api.recs) {
+            if rec(api, j, 0) == tag_sec() && rec(api, j, 1) == op && rec(api, j, 3) > 0 {
+                if seen == i {
+                    return text_of(api, rec(api, j, 2), rec(api, j, 3));
+                }
+                seen = seen + 1;
+            }
+            j = j + rec_width();
+        }
+        return text_of(api, 0, 0);
+    }
+    if is_open(api, op) {
+        return text_of(api, 0, 0);
+    }
+    while j < vec.size(api.recs) {
+        if rec(api, j, 0) == tag_default() {
+            if seen == i {
+                return text_of(api, rec(api, j, 1), rec(api, j, 2));
+            }
+            seen = seen + 1;
+        }
+        j = j + rec_width();
+    }
+    return text_of(api, 0, 0);
+}
+
+// ---------------------------------------------------------------------
 // Routing
 // ---------------------------------------------------------------------
 
