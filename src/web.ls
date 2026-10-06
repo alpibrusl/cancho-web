@@ -51,6 +51,9 @@ pub res struct Api {
 //   response:  3, op, status, text_off, text_len, node (-1 none, -2 problem), header_off, header_len
 //   component: 4, name_off, name_len, node, 0, 0, 0, 0
 //   body:      5, op, node, 0, 0, 0, 0, 0
+//   scheme:    6, name_off, name_len, kind (0 http bearer), desc_off, desc_len, 0, 0
+//   security:  7, op, name_off, name_len (0: the operation is open), 0, 0, 0, 0
+//   default:   8, name_off, name_len, 0, 0, 0, 0, 0
 fn rec_width() -> [] int {
     return 8;
 }
@@ -73,6 +76,18 @@ fn tag_comp() -> [] int {
 
 fn tag_body() -> [] int {
     return 5;
+}
+
+fn tag_scheme() -> [] int {
+    return 6;
+}
+
+fn tag_sec() -> [] int {
+    return 7;
+}
+
+fn tag_default() -> [] int {
+    return 8;
 }
 
 pub fn empty[&h](heap: &!h Heap) -> [heap] Api {
@@ -229,6 +244,14 @@ pub fn respond_problem[&h](heap: &!h Heap, a: Api, op: int, status: int) -> [hea
     return response(heap, a, op, status, "", 0 - 2);
 }
 
+// A response that is the shared error document (`components.responses.Error`), for an
+// API whose errors are not `application/problem+json`: a component named `Error` is its
+// schema, and it is written as `application/json`. The description is this status's own
+// (a `$ref` may carry one in OpenAPI 3.1).
+pub fn respond_error[&h, &d](heap: &!h Heap, a: Api, op: int, status: int, description: &d [byte]) -> [heap] Api {
+    return response(heap, a, op, status, description, 0 - 3);
+}
+
 // A header, a string, on the latest response declared for `op` (a `Location`).
 pub fn response_header[&h, &n](heap: &!h Heap, a: Api, op: int, name: &n [byte]) -> [heap] Api {
     let Api { router, recs, text, ops } = a;
@@ -259,6 +282,44 @@ pub fn component[&h, &n](heap: &!h Heap, a: Api, name: &n [byte], node: int) -> 
     let Api { router, recs, text, ops } = a;
     let (t, at) = text_add(heap, text, name);
     let rc = put_rec(heap, recs, tag_comp(), at, len(name), node, 0, 0, 0, 0);
+    return Api { router: router, recs: rc, text: t, ops: ops };
+}
+
+// ---------------------------------------------------------------------
+// Who may call (the document only: nothing here checks a token)
+// ---------------------------------------------------------------------
+
+// An HTTP bearer security scheme, listed under `components.securitySchemes`. `description`
+// may be empty.
+pub fn bearer_scheme[&h, &n, &d](heap: &!h Heap, a: Api, name: &n [byte], description: &d [byte]) -> [heap] Api {
+    let Api { router, recs, text, ops } = a;
+    let (t1, name_at) = text_add(heap, text, name);
+    let (t2, desc_at) = text_add(heap, t1, description);
+    let rc = put_rec(heap, recs, tag_scheme(), name_at, len(name), 0, desc_at, len(description), 0, 0);
+    return Api { router: router, recs: rc, text: t2, ops: ops };
+}
+
+// `op` may be called with `scheme`. Each call is one alternative (`security: [{a: []}, {b: []}]`:
+// the caller needs one of them). An operation with no call inherits the document's default.
+pub fn require[&h, &n](heap: &!h Heap, a: Api, op: int, scheme: &n [byte]) -> [heap] Api {
+    let Api { router, recs, text, ops } = a;
+    let (t, at) = text_add(heap, text, scheme);
+    let rc = put_rec(heap, recs, tag_sec(), op, at, len(scheme), 0, 0, 0, 0);
+    return Api { router: router, recs: rc, text: t, ops: ops };
+}
+
+// `op` needs no credentials (`security: []`), whatever the document's default says.
+pub fn no_auth[&h](heap: &!h Heap, a: Api, op: int) -> [heap] Api {
+    let Api { router, recs, text, ops } = a;
+    let rc = put_rec(heap, recs, tag_sec(), op, 0, 0, 0, 0, 0, 0);
+    return Api { router: router, recs: rc, text: text, ops: ops };
+}
+
+// The document's default security: each call is an alternative, as `require`.
+pub fn default_require[&h, &n](heap: &!h Heap, a: Api, scheme: &n [byte]) -> [heap] Api {
+    let Api { router, recs, text, ops } = a;
+    let (t, at) = text_add(heap, text, scheme);
+    let rc = put_rec(heap, recs, tag_default(), at, len(scheme), 0, 0, 0, 0, 0);
     return Api { router: router, recs: rc, text: t, ops: ops };
 }
 
@@ -425,6 +486,15 @@ fn path_param_seen[&a](api: &a Api, first: int, i: int) -> [] bool {
     return false;
 }
 
+// `{"name": []}`, one alternative of a `security` array.
+fn put_requirement[&h, &a](heap: &!h Heap, w: json.Writer, api: &a Api, at: int, n: int) -> [heap] json.Writer {
+    var o = json.begin_object(heap, w);
+    o = json.put_key(heap, o, text_of(api, at, n));
+    o = json.begin_array(heap, o);
+    o = json.end_array(heap, o);
+    return json.end_object(heap, o);
+}
+
 fn put_operation[&h, &a, &s](heap: &!h Heap, w: json.Writer, api: &a Api, sc: &s schema.Schema, op: int, at: int) -> [heap] json.Writer {
     var o = json.begin_object(heap, w);
     o = json.put_key(heap, o, "operationId");
@@ -466,6 +536,34 @@ fn put_operation[&h, &a, &s](heap: &!h Heap, w: json.Writer, api: &a Api, sc: &s
         i = i + rec_width();
     }
 
+    var open = false;
+    var alternatives = 0;
+    i = 0;
+    while i < vec.size(api.recs) {
+        if rec(api, i, 0) == tag_sec() && rec(api, i, 1) == op {
+            if rec(api, i, 3) == 0 {
+                open = true;
+            } else {
+                alternatives = alternatives + 1;
+            }
+        }
+        i = i + rec_width();
+    }
+    if open || alternatives > 0 {
+        o = json.put_key(heap, o, "security");
+        o = json.begin_array(heap, o);
+        if !open {
+            i = 0;
+            while i < vec.size(api.recs) {
+                if rec(api, i, 0) == tag_sec() && rec(api, i, 1) == op {
+                    o = put_requirement(heap, o, api, rec(api, i, 2), rec(api, i, 3));
+                }
+                i = i + rec_width();
+            }
+        }
+        o = json.end_array(heap, o);
+    }
+
     o = json.put_key(heap, o, "responses");
     o = json.begin_object(heap, o);
     i = 0;
@@ -481,6 +579,11 @@ fn put_operation[&h, &a, &s](heap: &!h Heap, w: json.Writer, api: &a Api, sc: &s
             if node == 0 - 2 {
                 o = json.put_key(heap, o, "$ref");
                 o = json.put_string(heap, o, "#/components/responses/Problem");
+            } else if node == 0 - 3 {
+                o = json.put_key(heap, o, "$ref");
+                o = json.put_string(heap, o, "#/components/responses/Error");
+                o = json.put_key(heap, o, "description");
+                o = json.put_string(heap, o, text_of(api, rec(api, i, 3), rec(api, i, 4)));
             } else {
                 o = json.put_key(heap, o, "description");
                 o = json.put_string(heap, o, text_of(api, rec(api, i, 3), rec(api, i, 4)));
@@ -579,7 +682,22 @@ fn put_paths[&h, &a, &s](heap: &!h Heap, w: json.Writer, api: &a Api, sc: &s sch
 }
 
 fn problem_response_json() -> [] &static [byte] {
-    return "{\"Problem\":{\"description\":\"a problem\",\"content\":{\"application/problem+json\":{\"schema\":{\"$ref\":\"#/components/schemas/Problem\"}}}}}";
+    return "{\"description\":\"a problem\",\"content\":{\"application/problem+json\":{\"schema\":{\"$ref\":\"#/components/schemas/Problem\"}}}}";
+}
+
+fn error_response_json() -> [] &static [byte] {
+    return "{\"description\":\"an error\",\"content\":{\"application/json\":{\"schema\":{\"$ref\":\"#/components/schemas/Error\"}}}}";
+}
+
+fn has_tag[&a](api: &a Api, tag: int) -> [] bool {
+    var i = 0;
+    while i < vec.size(api.recs) {
+        if rec(api, i, 0) == tag {
+            return true;
+        }
+        i = i + rec_width();
+    }
+    return false;
 }
 
 // The document: OpenAPI 3.1, `info`, `paths` from the declared operations, and
@@ -598,12 +716,55 @@ pub fn openapi[&h, &a, &s, &t, &v](heap: &!h Heap, api: &a Api, sc: &s schema.Sc
     w = json.put_key(heap, w, "version");
     w = json.put_string(heap, w, version);
     w = json.end_object(heap, w);
+    if has_tag(api, tag_default()) {
+        w = json.put_key(heap, w, "security");
+        w = json.begin_array(heap, w);
+        var d = 0;
+        while d < vec.size(api.recs) {
+            if rec(api, d, 0) == tag_default() {
+                w = put_requirement(heap, w, api, rec(api, d, 1), rec(api, d, 2));
+            }
+            d = d + rec_width();
+        }
+        w = json.end_array(heap, w);
+    }
     w = put_paths(heap, w, api, sc);
     w = json.put_key(heap, w, "components");
     w = json.begin_object(heap, w);
-    if has_component(api, "Problem") {
+    if has_component(api, "Problem") || has_component(api, "Error") {
         w = json.put_key(heap, w, "responses");
-        w = json.put_fragment(heap, w, problem_response_json());
+        w = json.begin_object(heap, w);
+        if has_component(api, "Problem") {
+            w = json.put_key(heap, w, "Problem");
+            w = json.put_fragment(heap, w, problem_response_json());
+        }
+        if has_component(api, "Error") {
+            w = json.put_key(heap, w, "Error");
+            w = json.put_fragment(heap, w, error_response_json());
+        }
+        w = json.end_object(heap, w);
+    }
+    if has_tag(api, tag_scheme()) {
+        w = json.put_key(heap, w, "securitySchemes");
+        w = json.begin_object(heap, w);
+        var k = 0;
+        while k < vec.size(api.recs) {
+            if rec(api, k, 0) == tag_scheme() {
+                w = json.put_key(heap, w, text_of(api, rec(api, k, 1), rec(api, k, 2)));
+                w = json.begin_object(heap, w);
+                w = json.put_key(heap, w, "type");
+                w = json.put_string(heap, w, "http");
+                w = json.put_key(heap, w, "scheme");
+                w = json.put_string(heap, w, "bearer");
+                if rec(api, k, 5) > 0 {
+                    w = json.put_key(heap, w, "description");
+                    w = json.put_string(heap, w, text_of(api, rec(api, k, 4), rec(api, k, 5)));
+                }
+                w = json.end_object(heap, w);
+            }
+            k = k + rec_width();
+        }
+        w = json.end_object(heap, w);
     }
     w = json.put_key(heap, w, "schemas");
     w = json.begin_object(heap, w);

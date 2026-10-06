@@ -202,6 +202,8 @@ the routing the declaration also made. Throughput is unchanged: GET one 123,200-
 113,900-123,600 for the hand-written routes and a page 70,800-75,700 against 70,400-72,500
 (alternated, three rounds each; the spread is run-to-run noise).
 
+**Who may call, and a declared error shape.** An operation can say which credentials it takes: `bearer_scheme` lists an HTTP bearer scheme under `components.securitySchemes`; `require` adds one alternative to an operation's `security` (the caller needs one of them); `no_auth` writes `security: []` for an open operation; `default_require` writes the document's own default, which an operation without a `require` inherits. An API whose errors are not `application/problem+json` names a component `Error` and answers with `respond_error`, which is a `$ref` to `components.responses.Error` that carries the status's own description (OpenAPI 3.1 allows that on a reference). It is the description only: nothing here checks a token, and a service keeps its own gate. Nothing is written for any of it unless it was declared: the users document is unchanged byte for byte. `tests/web_test.ls` compares a document with two alternatives, an open operation under a default and the error response with one derived by hand, and the same document is a valid OpenAPI 3.1 file for `openapi-spec-validator`. It came from `lexsys-hooks`, whose 26 routes in three token scopes were described by hand (lexsys-web#14).
+
 **What it does not do, and why.**
 
 * **It does not dispatch.** The application keeps its loop and its `if` on the id, for the reason
