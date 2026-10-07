@@ -14,7 +14,7 @@ edition 5;
 // opened, logged in and given its prepared statements before it listens, and every request
 // that needs the database makes a blocking round trip on it: `http.server` is one loop serving every client, so the
 // loop waits for PostgreSQL and no other request is served in the meantime (design.md of
-// lexsys-pg, sections 4-5, and docs/benchmarks.md say what that costs, measured). If the
+// cancho-pg, sections 4-5, and docs/benchmarks.md say what that costs, measured). If the
 // database does not answer, the request is a 503; the connection is not reopened.
 //
 // Authority (`cancho authority`): `net_in`, `net_out`, `conn_*`, `poll`, `clock`, `heap`,

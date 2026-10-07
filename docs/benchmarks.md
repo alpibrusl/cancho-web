@@ -196,7 +196,7 @@ is on a benchmarked path.
 
 ## On PostgreSQL
 
-`examples/users_pg` is the same API with PostgreSQL as its store (`lexsys-pg`'s driver, queries written
+`examples/users_pg` is the same API with PostgreSQL as its store (`cancho-pg`'s driver, queries written
 by `pgen` from `examples/users_pg/queries.sql`). It is compared with the same API in FastAPI twice,
 because "FastAPI with a database" is not one number either:
 
@@ -242,7 +242,7 @@ insert; no HTTP, no framework), transactions a second:
   12,577 that PostgreSQL itself answers over the same protocol, with the HTTP server, the JSON and the
   validation on top. Subtracting the 7.8 microseconds an in-memory read costs (129,000 a second, above) leaves
   **about 90 microseconds of loop time for one blocking round trip** to a PostgreSQL on its own core -- the
-  low end of the 100-300 microseconds `lexsys-pg`'s design.md estimated before anything was measured.
+  low end of the 100-300 microseconds `cancho-pg`'s design.md estimated before anything was measured.
   FastAPI's lean variant saturates its core (91% in `top` under this load; 2,953 a second, 3.5x slower) and the
   SQLAlchemy one is slower still (9.8x). The comparison with FastAPI is therefore mostly a comparison of
   what each spends *around* the query, and that is where the 3-10x is.
@@ -261,7 +261,7 @@ insert; no HTTP, no framework), transactions a second:
   Lean FastAPI has ten connections and reaches 2,375 a second, where Python, not the database, is the limit
   (it was at its core's limit on reads; not separately measured here for writes). A service
   with a real write workload wants a **pool** and a connection that does not block the loop -- the
-  non-blocking-connection slice of `lexsys-pg` (design.md §5) -- and this is the number that says so.
+  non-blocking-connection slice of `cancho-pg` (design.md §5) -- and this is the number that says so.
 * **A page is two round trips** (a count and a page of 20), 3,916 a second against 1,952 lean: 2.0x, with the
   same 2.1x of prepare-once to come. Not compared with a floor: `pgbench` was only asked for a lookup and an insert.
 * **A rejected body does not touch the database** (93,724 against 3,273-3,360: 28x), which is the in-memory
@@ -276,11 +276,11 @@ insert; no HTTP, no framework), transactions a second:
   would both slow down, and not by the same amount.
 * **Pool sizes** other than 10 for FastAPI, and a cancho service with more than one connection (which it could not
   have until the connection stopped blocking the loop; it can now: [below](#a-pool-in-one-process)).
-* **Go, Rust and Node** with a database; and the cost of TLS to PostgreSQL, which `lexsys-pg` cannot do yet.
+* **Go, Rust and Node** with a database; and the cost of TLS to PostgreSQL, which `cancho-pg` cannot do yet.
 
 ### Prepared statements
 
-`pgen` now writes `prepare_all` and every generated function runs its statement by name (lexsys-pg, design.md
+`pgen` now writes `prepare_all` and every generated function runs its statement by name (cancho-pg, design.md
 section 9): PostgreSQL parses and plans each query once per connection instead of on every call. The same run
 times both builds of `users_pg` -- the one that parses on every call (the numbers above) and the one that does
 not -- with the FastAPI services and `pgbench` in the same session, same machine, same pinning:
@@ -305,7 +305,7 @@ parsing every time, **24,717 prepared**; the same insert: 8,960 and 11,705.
   microseconds, about 8 of them the service's own work, and PostgreSQL needs 40 of them (1 / 24,717), so the
   remaining ~19 are PostgreSQL's core sitting idle while the single loop parses the next HTTP request and
   renders the answer. That idle is what one blocking connection costs once the database is fast, and what a
-  pool or a connection that does not block the loop would fill (lexsys-pg design.md section 5).
+  pool or a connection that does not block the loop would fill (cancho-pg design.md section 5).
 * **A page gained 16%** (3,865 to 4,496; smaller than a read's gain, and its repeats agree within a few percent), not 53%: it is two round trips (80 of its 222 microseconds at the prepared ceiling) and
   the rest is the service rendering 20 rows, each through a JSON writer and a validated fragment for its tags.
   Not profiled here; it is where to look next for that endpoint.
@@ -353,12 +353,12 @@ the one core the single service had; PostgreSQL stays on its own and the load ge
 * **What this does not buy.** Copies share nothing: no cache, no counters, no connection pool a request could
   borrow from, each holds its own PostgreSQL backend (a server's `max_connections` is a limit), and a query that
   takes a second still blocks *that copy's* clients. A service with state in memory, or with slow queries, wants the
-  loop to keep serving while a query is pending -- which is the design in lexsys-pg's `docs/nonblocking.md`.
+  loop to keep serving while a query is pending -- which is the design in cancho-pg's `docs/nonblocking.md`.
 
 ### A pool in one process
 
 `users_pg` with a ninth argument -- `users_pg <port> <host> <port> <user> <db> <password|-> <reuseport|-> <n>` -- holds
-`n` database connections in a `pg.pool` (`lexsys-pg`, `docs/nonblocking.md`) and no longer waits for any of them: a
+`n` database connections in a `pg.pool` (`cancho-pg`, `docs/nonblocking.md`) and no longer waits for any of them: a
 request that needs the database is held (`http.server`'s `hold`), its query is queued, the loop goes on to the next
 request, and the held one is answered when the poller says the reply is in. Every handler is two halves (`begin`
 checks the request and encodes the query, `conclude` reads the reply), which the blocking service runs back to back.
@@ -394,7 +394,7 @@ session, median of three 5-second rounds for reads and a page, and ten runs for 
   own rendering, as with copies.
 * **What it does not buy.** A slow query holds up the requests queued behind it *on its own connection* (in order),
   not the others; there is no reconnecting after a database restart (database routes answer 503 until the service is
-  restarted) and no per-request deadline. `lexsys-pg`'s `docs/nonblocking.md` section 9 lists what is open.
+  restarted) and no per-request deadline. `cancho-pg`'s `docs/nonblocking.md` section 9 lists what is open.
 
 The client under this service, one connection against libpq and the Python clients, is in that document too
 (section 9.2): level with libpq one query at a time, about 2.3x slower pipelined, cause not found.

@@ -26,7 +26,7 @@ so a change to the API is a change to a file). Not yet: dispatch -- the handler 
 
 ## Requirements
 
-- The **cancho** compiler and checkouts of **cancho-schema** (and, for the PostgreSQL example, **lexsys-pg**), at the revisions
+- The **cancho** compiler and checkouts of **cancho-schema** (and, for the PostgreSQL example, **cancho-pg**), at the revisions
   this repository's CI builds with (below). A package store records no hash of the `std` it was published with, so the compiler
   revision is part of the contract.
 - Rust, to build that compiler (its `rust-toolchain.toml` pins the toolchain).
@@ -158,9 +158,9 @@ leaves a hole, ids are not reused.
 the same schema nodes, the same OpenAPI document (plus a `pattern` on `name` and `email`, which refuse
 U+0000 because PostgreSQL text cannot hold it) and the same answers, byte for byte, and the end-to-end suite,
 Schemathesis included, runs against it unchanged (`USERS_PG=1 python3 tests/e2e.py`). It reaches the
-database through functions that `pgen` (in [`lexsys-pg`](https://github.com/alpibrusl/lexsys-pg)) wrote from
+database through functions that `pgen` (in [`cancho-pg`](https://github.com/alpibrusl/cancho-pg)) wrote from
 [`queries.sql`](examples/users_pg/queries.sql) by asking the server what each statement's parameters and
-columns are, and through `lexsys-pg`'s driver, so `cancho authority` on it names the network, one random-file
+columns are, and through `cancho-pg`'s driver, so `cancho authority` on it names the network, one random-file
 read for the login, and nothing foreign.
 
 ```

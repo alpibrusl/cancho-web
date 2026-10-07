@@ -10,7 +10,7 @@
 #   CANCHO        the cancho compiler binary     (default: cancho on PATH)
 #   CANCHO_DIR    a checkout of cancho           (default: ../cancho)
 #   SCHEMA_DIR     a checkout of cancho-schema     (default: ../cancho-schema)
-#   PG_DIR         a checkout of lexsys-pg         (default: ../lexsys-pg; read only by a
+#   PG_DIR         a checkout of cancho-pg         (default: ../cancho-pg; read only by a
 #                  program that imports `pg`, and `pg.pool` from its `.cancho-vcs-pool`)
 #
 # Any other `.cho` file beside the program is built with it: the module `pgen` wrote
@@ -20,7 +20,7 @@ here=$(cd "$(dirname "$0")/.." && pwd)
 CANCHO=${CANCHO:-cancho}
 CANCHO_DIR=${CANCHO_DIR:-$here/../cancho}
 SCHEMA_DIR=${SCHEMA_DIR:-$here/../cancho-schema}
-PG_DIR=${PG_DIR:-$here/../lexsys-pg}
+PG_DIR=${PG_DIR:-$here/../cancho-pg}
 src=$1
 out=$2
 deps="$here/build/deps"

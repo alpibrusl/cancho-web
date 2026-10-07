@@ -11,7 +11,7 @@ env:
   # repositories (and the compiler, whose bundled `std` no lock records).
   CANCHO_REV: a4572ea3b506e4bcec1c4be43deda1043c11ba9f
   SCHEMA_REV: 5152851c7487315cb20f031c9c1c69216e5a2931
-  PG_REV: c5ef36c07c7057f230fc5f41cbeffcc370a79b60
+  PG_REV: f1b972fb519f16a9982146691e4a28ef3bc9d79d
 
 jobs:
   test:
@@ -35,9 +35,9 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
-          repository: alpibrusl/lexsys-pg
+          repository: alpibrusl/cancho-pg
           ref: ${{ env.PG_REV }}
-          path: lexsys-pg
+          path: cancho-pg
 
       - name: Cache the compiler
         id: compiler
@@ -57,7 +57,7 @@ jobs:
           which psql || (sudo apt-get update -q && sudo apt-get install -y -q postgresql-client)
 
       # A PostgreSQL for examples/users_pg (trust authentication: the service logs in with
-      # `-`, and SCRAM is lexsys-pg's own test).
+      # `-`, and SCRAM is cancho-pg's own test).
       - name: PostgreSQL 16
         run: |
           docker run -d --name pg -p 5432:5432 -e POSTGRES_HOST_AUTH_METHOD=trust postgres:16 >/dev/null
@@ -82,7 +82,7 @@ jobs:
           CANCHO: ${{ github.workspace }}/cancho/target/release/cancho
           CANCHO_DIR: ${{ github.workspace }}/cancho
           SCHEMA_DIR: ${{ github.workspace }}/cancho-schema
-          PG_DIR: ${{ github.workspace }}/lexsys-pg
+          PG_DIR: ${{ github.workspace }}/cancho-pg
           USERS_PG: "1"
           PGHOST: 127.0.0.1
           PGPORT: "5432"
@@ -99,7 +99,7 @@ jobs:
           CANCHO: ${{ github.workspace }}/cancho/target/release/cancho
           CANCHO_DIR: ${{ github.workspace }}/cancho
           SCHEMA_DIR: ${{ github.workspace }}/cancho-schema
-          PG_DIR: ${{ github.workspace }}/lexsys-pg
+          PG_DIR: ${{ github.workspace }}/cancho-pg
           USERS_PG: "1"
           USERS_PG_POOL: "2"
           PGHOST: 127.0.0.1
@@ -118,7 +118,7 @@ jobs:
           PGUSER: postgres
         run: |
           psql -d users_pg -q -v ON_ERROR_STOP=1 -f examples/users_pg/schema.sql
-          $CANCHO build --std ../lexsys-pg/tools/pgen.cho ../lexsys-pg/src/pg.cho -o /tmp/pgen
+          $CANCHO build --std ../cancho-pg/tools/pgen.cho ../cancho-pg/src/pg.cho -o /tmp/pgen
           /tmp/pgen 127.0.0.1 5432 postgres users_pg - examples/users_pg/queries.sql > /tmp/queries.cho
           diff /tmp/queries.cho examples/users_pg/queries.cho
 
