@@ -2,7 +2,7 @@
 //
 //	go build -o users . && ./users 8000
 //
-// Same routes, same limits, same validation rules as examples/users/users.ls (name
+// Same routes, same limits, same validation rules as examples/users/users.cho (name
 // 1..64 code points, email 3..120, age 0..150, role in admin/user/guest, up to 8 tags
 // of 1..16, no unknown fields; limit 1..100) and the same stored answer: the user's
 // canonical compact JSON, id first. It is written the ordinary way -- net/http,

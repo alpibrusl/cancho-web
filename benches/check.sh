@@ -1,16 +1,16 @@
 #!/bin/bash
 # Do the Go and C implementations still do the same work as examples/users?
 #
-#   LEX_SYS=... benches/check.sh
+#   CANCHO=... benches/check.sh
 #
-# Builds the lex-sys service, the Go server and the C server, starts all three fresh and
-# runs benches/equivalent.py (16 requests) and benches/edges.py (84 more) with the lex-sys
+# Builds the cancho service, the Go server and the C server, starts all three fresh and
+# runs benches/equivalent.py (16 requests) and benches/edges.py (84 more) with the cancho
 # service as the reference. Seconds, no timing, no FastAPI: the gate the benchmark runs
 # first, runnable on every push.
 set -euo pipefail
 here=$(cd "$(dirname "$0")/.." && pwd)
 mkdir -p "$here/build"
-"$here/scripts/build.sh" "$here/examples/users/users.ls" "$here/build/users"
+"$here/scripts/build.sh" "$here/examples/users/users.cho" "$here/build/users"
 (cd "$here/benches/go_users" && go build -o "$here/build/go_users" .)
 gcc -O2 -Wall -Werror -o "$here/build/floor" "$here/benches/c_floor/floor.c"
 pids=()

@@ -1,8 +1,8 @@
 #!/bin/bash
-# The users API on PostgreSQL: lex-sys (examples/users_pg) against FastAPI with SQLAlchemy and with
+# The users API on PostgreSQL: cancho (examples/users_pg) against FastAPI with SQLAlchemy and with
 # asyncpg, on four workloads (docs/benchmarks.md, "On PostgreSQL").
 #
-#   PGHOST=127.0.0.1 PGPORT=5432 PGUSER=postgres LEX_SYS=... benches/run_pg.sh [rounds]
+#   PGHOST=127.0.0.1 PGPORT=5432 PGUSER=postgres CANCHO=... benches/run_pg.sh [rounds]
 #
 # PGPORT must be a server the user may create and drop databases on (trust or no password). Each server
 # gets a database of its own, created fresh from examples/users_pg/schema.sql before every run -- the same
@@ -22,12 +22,12 @@ kload=${KLOAD:-/tmp/kload}
 pg_core=${PG_CORE:-1}
 export PGHOST=${PGHOST:-127.0.0.1} PGPORT=${PGPORT:-5432} PGUSER=${PGUSER:-postgres}
 [ -x "$kload" ] || gcc -O2 -o "$kload" "$here/benches/kload.c" -lpthread
-"$here/scripts/build.sh" "$here/examples/users_pg/users_pg.ls" "$here/build/users_pg"
+"$here/scripts/build.sh" "$here/examples/users_pg/users_pg.cho" "$here/build/users_pg"
 
 # Pin the postmaster, and so every backend it forks, to one core.
 for p in $(pgrep -x postgres); do taskset -a -p -c "$pg_core" "$p" >/dev/null 2>&1 || true; done
 
-NAMES=("lex-sys users_pg (1 connection, blocking)" "FastAPI + SQLAlchemy 2 async + asyncpg (pool 10)" "FastAPI + asyncpg (pool 10, lean)" "lex-sys users_pg, parsing every query (before)")
+NAMES=("cancho users_pg (1 connection, blocking)" "FastAPI + SQLAlchemy 2 async + asyncpg (pool 10)" "FastAPI + asyncpg (pool 10, lean)" "cancho users_pg, parsing every query (before)")
 FA="python3 -m uvicorn app:app --port \$PORT --loop uvloop --http httptools"
 CMDS=("$here/build/users_pg \$PORT $PGHOST $PGPORT $PGUSER \$DB -" "cd $here/benches/fastapi_users_pg && $FA" "cd $here/benches/fastapi_users_pg && LEAN=1 $FA" "${UNPREPARED_BIN:-/nonexistent} \$PORT $PGHOST $PGPORT $PGUSER \$DB -")
 LEX=0; ORM=1; LEAN=2; UNPREP=3
@@ -69,7 +69,7 @@ settle() { sleep "${SETTLE:-0}"; }
 load() { settle; taskset -c 2,3 "$kload" "$port" 2 16 "$secs" "$@"; }
 
 if [ -z "${ONLY:-}" ]; then
-  echo "== equivalence (the 16 requests; lex-sys users_pg, FastAPI + SQLAlchemy, FastAPI + asyncpg)"
+  echo "== equivalence (the 16 requests; cancho users_pg, FastAPI + SQLAlchemy, FastAPI + asyncpg)"
   declare -a PIDS PORTS
   for i in $only; do start $i; PIDS+=("$PID"); PORTS+=("$port"); done
   set +e

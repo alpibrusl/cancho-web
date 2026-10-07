@@ -4,15 +4,15 @@
     python3 benches/edges.py <reference-port> <port> [<port> ...]
 
 Each must be freshly started. `equivalent.py` is the gate the benchmark runs; this is
-the wider net used while writing the Go and C servers (the lex-sys service is the
+the wider net used while writing the Go and C servers (the cancho service is the
 reference): code-point lengths with escapes and astral characters, both ends of every
 range, duplicate keys, whitespace, bodies that are not objects, malformed JSON, the
 content type, and query strings. Statuses must match and successful bodies must be equal.
 
 Not compared, because the servers are known to differ (see the header of each): `150.0`
 whole floats, `null` fields, invalid UTF-8, differently-cased keys. Two more are run
-last and only shown: a repeated key (the lex-sys service keeps the first, the others the
-last) and a lone surrogate escape (the lex-sys service answers 400).
+last and only shown: a repeated key (the cancho service keeps the first, the others the
+last) and a lone surrogate escape (the cancho service answers 400).
 """
 import http.client
 import json

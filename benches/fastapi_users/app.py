@@ -3,14 +3,14 @@
     uvicorn app:app --port 8000                  # or --loop uvloop --http httptools
     LEAN=1 uvicorn app:app --port 8000           # no response_model: the fastest honest FastAPI
 
-Same routes, same limits, same validation rules as examples/users/users.ls
+Same routes, same limits, same validation rules as examples/users/users.cho
 (name 1..64, email 3..120, age 0..150, role in admin/user/guest, up to 8 tags of
 1..16, no unknown fields; limit 1..100). Not the same error *format*: FastAPI's 422
 is its own, and the benchmark compares work, not error documents.
 
 `typical` (the default) is how most FastAPI code is written: a `response_model`, so
 every answer is validated and serialized by pydantic again. `LEAN=1` returns the
-stored bytes, as the lex-sys service does.
+stored bytes, as the cancho service does.
 """
 import json
 import os

@@ -3,16 +3,16 @@
     PGDATABASE=... uvicorn app:app --port 8000 --loop uvloop --http httptools        # SQLAlchemy 2 (async) + asyncpg
     LEAN=1 PGDATABASE=... uvicorn app:app --port 8000 --loop uvloop --http httptools   # asyncpg directly, hand-built JSON
 
-Same routes, limits, validation and table (`examples/users_pg/schema.sql`) as the lex-sys service,
+Same routes, limits, validation and table (`examples/users_pg/schema.sql`) as the cancho service,
 including that `name` and `email` refuse U+0000, which PostgreSQL text cannot hold (so the same
-work is done; `pattern` is what the lex-sys document says). Not the same error *format*.
+work is done; `pattern` is what the cancho document says). Not the same error *format*.
 
 `typical` (the default) is how most FastAPI + SQLAlchemy code is written: an async session per
 request from a pool, the ORM, a `response_model` that validates and serializes every answer again.
 `LEAN=1` is the fastest honest version: a pool of asyncpg connections, the SQL of
 `examples/users_pg/queries.sql`, and the answer built without a model.
 
-The connection comes from the usual PG* variables; the pool holds 10 connections (the lex-sys
+The connection comes from the usual PG* variables; the pool holds 10 connections (the cancho
 service holds one: `http.server` is one loop and a query blocks it).
 """
 import json

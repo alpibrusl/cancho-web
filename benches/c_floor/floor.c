@@ -9,14 +9,14 @@
 // question the other comparisons cannot: how much of a framework's per-request
 // cost is the framework, and is the load generator the limit?
 //
-// Same work as examples/users/users.ls where the benchmark can tell: name 1..64
+// Same work as examples/users/users.cho where the benchmark can tell: name 1..64
 // code points, email 3..120, age 0..150, role in admin/user/guest, up to 8 tags of
 // 1..16, no unknown fields, limit 1..100, the stored answer is the canonical
 // compact JSON with `id` first. Left out: /openapi.json, chunked request bodies,
-// anything under TLS. Known edges where it differs from the lex-sys service (none is
+// anything under TLS. Known edges where it differs from the cancho service (none is
 // in benches/equivalent.py's cases): `150.0` is not an integer here, a `null` field
 // is a 422, invalid UTF-8 is not checked, and of two equal keys the last wins (the
-// lex-sys service keeps the first).
+// cancho service keeps the first).
 #define _GNU_SOURCE
 #include <arpa/inet.h>
 #include <errno.h>

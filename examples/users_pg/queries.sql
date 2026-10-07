@@ -1,6 +1,6 @@
--- The queries of users_pg. `pgen` turns this file into queries.ls (see the README):
+-- The queries of users_pg. `pgen` turns this file into queries.cho (see the README):
 --
---     pgen <host> <port> <user> users_pg <password|-> examples/users_pg/queries.sql > examples/users_pg/queries.ls
+--     pgen <host> <port> <user> users_pg <password|-> examples/users_pg/queries.sql > examples/users_pg/queries.cho
 --
 -- `get_user`, `list_users` and `add_user` (what it returns) select the same columns in the same order:
 -- users_pg reads rows of all three with `get_user`'s accessors, so a created user is answered from the

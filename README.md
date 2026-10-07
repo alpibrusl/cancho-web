@@ -1,12 +1,12 @@
-# lexsys-web
+# cancho-web
 
-[![ci](https://github.com/alpibrusl/lexsys-web/actions/workflows/ci.yml/badge.svg)](https://github.com/alpibrusl/lexsys-web/actions/workflows/ci.yml)
+[![ci](https://github.com/alpibrusl/cancho-web/actions/workflows/ci.yml/badge.svg)](https://github.com/alpibrusl/cancho-web/actions/workflows/ci.yml)
 
-A web layer for [lex-sys](https://github.com/alpibrusl/lex-sys), a typed systems language
+A web layer for [cancho](https://github.com/alpibrusl/cancho), a typed systems language
 with linear ownership and capability effects: routes with typed parameters, request bodies
-validated by [`lexsys-schema`](https://github.com/alpibrusl/lexsys-schema), `problem+json`
+validated by [`cancho-schema`](https://github.com/alpibrusl/cancho-schema), `problem+json`
 errors, and an OpenAPI document generated from the same declarations -- on top of the
-`http.server` package that `lex-sys` ships (`packages/http-server/`).
+`http.server` package that `cancho` ships (`packages/http-server/`).
 
 One thread, a `Poller`, no `Ffi`, no `extern fn`: the compiled server's authority report
 names exactly what it can do, and C is not on the list.
@@ -14,10 +14,10 @@ names exactly what it can do, and C is not on the list.
 ## Status
 
 **The declaration half of the framework is built.**
-[`examples/users`](examples/users/users.ls) is a CRUD JSON API over `http.server` and
-`lexsys-schema`, held to its own OpenAPI document by an end-to-end test over real sockets
+[`examples/users`](examples/users/users.cho) is a CRUD JSON API over `http.server` and
+`cancho-schema`, held to its own OpenAPI document by an end-to-end test over real sockets
 and by Schemathesis, and benchmarked against FastAPI, Go and C ([below](#benchmarks)).
-[`src/web.ls`](src/web.ls) declares each operation once -- its route, parameters, body and
+[`src/web.cho`](src/web.cho) declares each operation once -- its route, parameters, body and
 responses -- and the router and the OpenAPI document both come from that declaration
 (the document is checked in as [`examples/users/openapi.json`](examples/users/openapi.json),
 so a change to the API is a change to a file). Not yet: dispatch -- the handler is still an
@@ -26,7 +26,7 @@ so a change to the API is a change to a file). Not yet: dispatch -- the handler 
 
 ## Requirements
 
-- The **lex-sys** compiler and checkouts of **lexsys-schema** (and, for the PostgreSQL example, **lexsys-pg**), at the revisions
+- The **cancho** compiler and checkouts of **cancho-schema** (and, for the PostgreSQL example, **lexsys-pg**), at the revisions
   this repository's CI builds with (below). A package store records no hash of the `std` it was published with, so the compiler
   revision is part of the contract.
 - Rust, to build that compiler (its `rust-toolchain.toml` pins the toolchain).
@@ -38,20 +38,20 @@ so a change to the API is a change to a file). Not yet: dispatch -- the handler 
 cannot drift from it):
 
 ```
-git clone https://github.com/alpibrusl/lex-sys
-git clone https://github.com/alpibrusl/lexsys-schema
-git clone https://github.com/alpibrusl/lexsys-web && cd lexsys-web
+git clone https://github.com/alpibrusl/cancho
+git clone https://github.com/alpibrusl/cancho-schema
+git clone https://github.com/alpibrusl/cancho-web && cd cancho-web
 pin() { sed -n "s/^ *$1: *//p" .github/workflows/ci.yml; }
-(cd ../lex-sys && git checkout "$(pin LEX_SYS_REV)" && cargo build --release -p lex-sys)
-(cd ../lexsys-schema && git checkout "$(pin SCHEMA_REV)")
-export LEX_SYS=$PWD/../lex-sys/target/release/lex-sys
+(cd ../cancho && git checkout "$(pin CANCHO_REV)" && cargo build --release -p cancho)
+(cd ../cancho-schema && git checkout "$(pin SCHEMA_REV)")
+export CANCHO=$PWD/../cancho/target/release/cancho
 ```
 
 **2. Build and run the example** (the two packages are fetched and verified against
 `deps/*.lock` -- by hash -- every time, never taken from a copy checked in here):
 
 ```
-scripts/build.sh examples/users/users.ls build/users
+scripts/build.sh examples/users/users.cho build/users
 build/users 8080 &
 ```
 
@@ -83,8 +83,8 @@ python3 tests/e2e.py            # 27 tests over real sockets, Schemathesis inclu
 benches/check.sh                # the Go and C comparison servers still do the same work
 ```
 
-`scripts/build.sh` looks for `lex-sys` on `PATH` (or `LEX_SYS=`) and for the checkouts at
-`../lex-sys` and `../lexsys-schema` (or `LEX_SYS_DIR=`, `SCHEMA_DIR=`), which is why step 1
+`scripts/build.sh` looks for `cancho` on `PATH` (or `CANCHO=`) and for the checkouts at
+`../cancho` and `../cancho-schema` (or `CANCHO_DIR=`, `SCHEMA_DIR=`), which is why step 1
 clones them beside this one.
 
 ## Examples
@@ -154,18 +154,18 @@ leaves a hole, ids are not reused.
 
 #### The same API on PostgreSQL
 
-[`examples/users_pg`](examples/users_pg/users_pg.ls) is this service with a table behind it: the same routes,
+[`examples/users_pg`](examples/users_pg/users_pg.cho) is this service with a table behind it: the same routes,
 the same schema nodes, the same OpenAPI document (plus a `pattern` on `name` and `email`, which refuse
 U+0000 because PostgreSQL text cannot hold it) and the same answers, byte for byte, and the end-to-end suite,
 Schemathesis included, runs against it unchanged (`USERS_PG=1 python3 tests/e2e.py`). It reaches the
 database through functions that `pgen` (in [`lexsys-pg`](https://github.com/alpibrusl/lexsys-pg)) wrote from
 [`queries.sql`](examples/users_pg/queries.sql) by asking the server what each statement's parameters and
-columns are, and through `lexsys-pg`'s driver, so `lex-sys authority` on it names the network, one random-file
+columns are, and through `lexsys-pg`'s driver, so `cancho authority` on it names the network, one random-file
 read for the login, and nothing foreign.
 
 ```
 createdb users_pg && psql users_pg -f examples/users_pg/schema.sql
-scripts/build.sh examples/users_pg/users_pg.ls build/users_pg
+scripts/build.sh examples/users_pg/users_pg.cho build/users_pg
 build/users_pg 8080 127.0.0.1 5432 postgres users_pg -         # <port> <db host> <db port> <db user> <db> <password|->
 ```
 
@@ -190,7 +190,7 @@ do. The same 29 tests pass against both, plus 6 for the pool (`USERS_PG_POOL=2 U
 
 ## Usage
 
-The shape is declared once, as data (`setup` in [`users.ls`](examples/users/users.ls)); the
+The shape is declared once, as data (`setup` in [`users.cho`](examples/users/users.cho)); the
 same nodes validate a body *and* appear in `/openapi.json`:
 
 ```
@@ -235,14 +235,14 @@ A request header is `web.header_param(heap, api, op, "Idempotency-Key", node, fa
 name) and `web.about` (the document). None of them changes what is routed.
 
 `web` is also a package, so a project does not copy it: `scripts/publish.sh` writes the store
-[`.lex-sys-vcs`](.lex-sys-vcs) from `src/web.ls`, with `lexsys-schema` recorded as its requirement, and a project's
-`lex-sys.toml` names it (`[dependencies.web]`, `git`, a `rev` that has the store, `path = ".lex-sys-vcs"`; the project
-names `lexsys-schema` too, to import it). CI checks that the committed store is what the source publishes
+[`.cancho-vcs`](.cancho-vcs) from `src/web.cho`, with `cancho-schema` recorded as its requirement, and a project's
+`cancho.toml` names it (`[dependencies.web]`, `git`, a `rev` that has the store, `path = ".cancho-vcs"`; the project
+names `cancho-schema` too, to import it). CI checks that the committed store is what the source publishes
 (`scripts/publish.sh --check`).
 
 The loop is the application's own: `wait` does the I/O once, `next` hands over one parsed
 request, the handler builds its answer, `respond` sends it. That inversion (instead of a
-callback) is forced by the region system -- `lex-sys`'s `docs/http-server.md` §2 -- and is why
+callback) is forced by the region system -- `cancho`'s `docs/http-server.md` §2 -- and is why
 a handler's request is a borrowed view of the loop's buffers, copied nowhere.
 
 ```
@@ -256,7 +256,7 @@ while true {
 }
 ```
 
-`lex-sys authority` on the built service reports `args`, `clock`, `conn_*`, `heap`, `net_in`,
+`cancho authority` on the built service reports `args`, `clock`, `conn_*`, `heap`, `net_in`,
 `poll` and the console's error stream -- **no `ffi`, no filesystem**.
 
 ## Tests
@@ -279,7 +279,7 @@ The real binary on a real socket, a real HTTP client, and:
   validation edge cases (every error with its pointer, no coercion, `150.0`).
 
 ```
-lex-sys test tests/web_test.ls src/web.ls build/deps/*.ls --std   # `web` unit tests (after a build has fetched build/deps)
+cancho test tests/web_test.cho src/web.cho build/deps/*.cho --std   # `web` unit tests (after a build has fetched build/deps)
 benches/check.sh                  # the Go and C implementations still do the same work (seconds)
 ```
 
@@ -294,7 +294,7 @@ comparison does and does not show):
 
 | requests a second | GET one | page of 20 | rejected body | create |
 |---|---:|---:|---:|---:|
-| **lex-sys** | **128,972** | **70,768** | **94,659** | **64,327** |
+| **cancho** | **128,972** | **70,768** | **94,659** | **64,327** |
 | Go `net/http` | 79,772 | 65,654 | 60,278 | 53,580 |
 | hand-written C (epoll) | 117,958 | 105,523 | 107,680 | 91,783 |
 | FastAPI (best set-up) | 5,216 | 4,604 | 3,606 | 4,163 |
@@ -306,18 +306,18 @@ comparison does and does not show):
 
 One 4-vCPU VM, one run; repeats differ by about 5% (a create by up to 10%). The page endpoint
 was 40,755 in the first comparison: the comparison is what found the two causes, one in the
-example and one in lex-sys's `std.buffer`, both fixed.
+example and one in cancho's `std.buffer`, both fixed.
 
 ## Layout
 
 ```
-src/web.ls                the declaration layer: operations, parameters, bodies, responses -> router + OpenAPI
-examples/users/users.ls   the service: schemas, the declared API, handlers, store, the loop
+src/web.cho                the declaration layer: operations, parameters, bodies, responses -> router + OpenAPI
+examples/users/users.cho   the service: schemas, the declared API, handlers, store, the loop
 examples/users/openapi.json  the contract as a file, checked against what the service serves
 scripts/build.sh          fetch + verify the locked packages, then build
 deps/*.lock               the packages this builds against, pinned by hash
 tests/e2e.py              the end-to-end tests (real binary, real sockets, Schemathesis)
-tests/web_test.ls         unit tests of `web`: documents derived by hand, compared byte for byte
+tests/web_test.cho         unit tests of `web`: documents derived by hand, compared byte for byte
 benches/                  the benchmark: the FastAPI, Go and C implementations of the same
                           API, the load generator, and the checks that they do the same work
 docs/design.md            what the framework layer will be, and what building the example found
