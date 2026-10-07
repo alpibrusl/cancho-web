@@ -10,7 +10,7 @@ set -uo pipefail
 here=$(cd "$(dirname "$0")/.." && pwd)
 export PGHOST=${PGHOST:-127.0.0.1} PGPORT=${PGPORT:-5432} PGUSER=${PGUSER:-postgres}
 secs=${SECS:-5}; rounds=${ROUNDS:-3}; creates=${CREATES:-20000}
-if [ -z "${BIN:-}" ]; then "$here/scripts/build.sh" "$here/examples/users_pg/users_pg.ls" "$here/build/users_pg"; BIN=$here/build/users_pg; fi
+if [ -z "${BIN:-}" ]; then "$here/scripts/build.sh" "$here/examples/users_pg/users_pg.cho" "$here/build/users_pg"; BIN=$here/build/users_pg; fi
 kload=${KLOAD:-/tmp/kload}
 [ -x "$kload" ] || gcc -O2 -o "$kload" "$here/benches/kload.c" -lpthread
 for p in $(pgrep -x postgres); do taskset -a -p -c 1 "$p" >/dev/null 2>&1 || true; done

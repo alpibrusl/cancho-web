@@ -2,11 +2,11 @@
 # The users API against FastAPI, Go and a hand-written C server, on four workloads
 # (docs/benchmarks.md).
 #
-#   LEX_SYS=... benches/run.sh [rounds]
+#   CANCHO=... benches/run.sh [rounds]
 #
 # Each server is pinned to core 0, alone, and the load generator to cores 2,3 --
 # `taskset`, so this wants a machine with at least 4 cores. Before any timing,
-# `equivalent.py` sends the same requests to the lex-sys service and to every other
+# `equivalent.py` sends the same requests to the cancho service and to every other
 # implementation and refuses to go on unless the statuses and the successful bodies
 # agree, and `edges.py` does the same for the implementations that are not frameworks'
 # to get wrong (the Go and C servers): a comparison of speeds is only a comparison if
@@ -19,14 +19,14 @@ secs=${SECS:-5}
 create_requests=${CREATE_REQUESTS:-40000}
 kload=${KLOAD:-/tmp/kload}
 [ -x "$kload" ] || gcc -O2 -o "$kload" "$here/benches/kload.c" -lpthread
-"$here/scripts/build.sh" "$here/examples/users/users.ls" "$here/build/users"
+"$here/scripts/build.sh" "$here/examples/users/users.cho" "$here/build/users"
 (cd "$here/benches/go_users" && go build -o "$here/build/go_users" .)
 gcc -O2 -Wall -o "$here/build/floor" "$here/benches/c_floor/floor.c"
 gcc -O2 -Wall -o "$here/build/ceiling" "$here/benches/c_floor/ceiling.c"
 
 # name | command (given $PORT) | how to stop
 declare -a NAMES CMDS
-NAMES+=("lex-sys users");                CMDS+=("$here/build/users \$PORT")
+NAMES+=("cancho users");                CMDS+=("$here/build/users \$PORT")
 NAMES+=("Go net/http");                  CMDS+=("$here/build/go_users \$PORT")
 NAMES+=("C floor (hand-written epoll)"); CMDS+=("$here/build/floor \$PORT")
 NAMES+=("C ceiling (canned reply)");     CMDS+=("$here/build/ceiling \$PORT")
@@ -57,14 +57,14 @@ PY
 }
 load() { taskset -c 2,3 "$kload" "$port" 2 16 "$secs" "$@"; }
 
-echo "== equivalence (the 16 requests; lex-sys users, Go, C floor, FastAPI)"
+echo "== equivalence (the 16 requests; cancho users, Go, C floor, FastAPI)"
 declare -a PIDS PORTS
 for i in $LEX $GO $FLOOR $FASTAPI; do start $i; PIDS+=("$PID"); PORTS+=("$port"); done
 set +e
 python3 "$here/benches/equivalent.py" "${PORTS[@]}"; eq=$?
 for p in "${PIDS[@]}"; do PID=$p; stop; done
 [ $eq -eq 0 ] || exit 1
-echo "== edge cases (84 more; lex-sys users, Go, C floor)"
+echo "== edge cases (84 more; cancho users, Go, C floor)"
 PIDS=(); PORTS=()
 for i in $LEX $GO $FLOOR; do start $i; PIDS+=("$PID"); PORTS+=("$port"); done
 python3 "$here/benches/edges.py" "${PORTS[@]}"; eq=$?

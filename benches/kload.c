@@ -1,4 +1,4 @@
-// Closed-loop keep-alive load generator, from lex-sys benches/server/kload.c, with
+// Closed-loop keep-alive load generator, from cancho benches/server/kload.c, with
 // a method and a body so a POST can be measured:
 //
 //   kload <port> <threads> <connections-per-thread> <seconds> <path> [lat] [METHOD [BODY]]

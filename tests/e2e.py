@@ -3,7 +3,7 @@
 
     python3 tests/e2e.py                       # builds with scripts/build.sh
     BIN=build/users python3 tests/e2e.py       # an already built binary
-    LEX_SYS=/path/to/lex-sys python3 tests/e2e.py
+    CANCHO=/path/to/cancho python3 tests/e2e.py
     USERS_PG=1 python3 tests/e2e.py            # examples/users_pg: the same tests, PostgreSQL as the store
                                                # (PGHOST PGPORT PGUSER PGDATABASE [PGPASSWORD] name a database
                                                # the user may drop and create tables in)
@@ -55,7 +55,7 @@ def setUpModule():
     if not BIN:
         BIN = os.path.join(tempfile.mkdtemp(prefix="users-"), example)
         subprocess.run([os.path.join(ROOT, "scripts", "build.sh"),
-                        os.path.join(ROOT, "examples", example, example + ".ls"), BIN], check=True)
+                        os.path.join(ROOT, "examples", example, example + ".cho"), BIN], check=True)
     PORT = free_port()
     args = [BIN, str(PORT)]
     if USERS_PG:
@@ -631,7 +631,7 @@ class Validation(unittest.TestCase):
     def test_a_whole_number_written_as_a_float_is_an_integer(self):
         # `150.0` is what a Python client sends for 150, and what JSON Schema's
         # `"type":"integer"` -- which the document says -- accepts. Found by
-        # Schemathesis; see lexsys-schema docs/design.md section 11.
+        # Schemathesis; see cancho-schema docs/design.md section 11.
         for text, want in ((b"150.0", 150), (b"1.5e2", 150), (b"0.0", 0)):
             status, _, user = request(conn(), "POST", "/users", b'{"name":"f","age":' + text + b'}')
             self.assertEqual((status, user["age"]), (201, want), text)
