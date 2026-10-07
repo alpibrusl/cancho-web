@@ -3,7 +3,7 @@
 // Each query is a function that runs it (`<name>`: the whole reply and a status, 0 for ok), one that only
 // encodes the request for `pg.pool.submit` (`<name>_start`), and one accessor per result column
 // (`<name>_<column>`, read from a row as `pg.first_row`/`pg.next_row` give it; `_is_null` where the
-// column can be NULL). Call `prepare_all` once after login, before the first query.
+// column can be NULL). Call `prepare_all` once after login, before the first query (or give `prepare_script` to `pg.pool.reconnect`).
 edition 5;
 
 module queries;
@@ -366,4 +366,17 @@ pub fn prepare_all[&h, &c](heap: &!h Heap, conn: &!c Conn) -> [heap, conn_read, 
     reply = r4;
     status = s4;
     return (reply, status);
+}
+
+// The same statements as the bytes to send after a login (Parse and Sync for each, in order) and how many there are,
+// for a pool that logs in by itself: `pg.pool.reconnect` takes them, and prepares them again on every connection
+// it makes.
+pub fn prepare_script[&h](heap: &!h Heap) -> [heap] (buffer.Buffer, int) {
+    var script = buffer.empty(heap, 256);
+    script = pg.parse_append(heap, script, "count_users", "select count(*) as total from users");
+    script = pg.parse_append(heap, script, "list_users", "select id, name, email, age, role, tags from users order by id limit $1 offset $2");
+    script = pg.parse_append(heap, script, "get_user", "select id, name, email, age, role, tags from users where id = $1");
+    script = pg.parse_append(heap, script, "add_user", "insert into users (name, email, age, role, tags) values ($1, $2, $3, $4, $5) returning id, name, email, age, role, tags");
+    script = pg.parse_append(heap, script, "delete_user", "delete from users where id = $1");
+    return (script, 5);
 }
