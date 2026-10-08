@@ -1,6 +1,6 @@
 # cancho-web
 
-> A web layer for cancho, a typed systems language: each operation (route, parameters, body, responses) is declared once, and the router and an OpenAPI 3.1 document are made from that declaration. Request bodies are validated by cancho-schema, every error at once, as RFC 9457 problem+json. One thread, no Ffi, no C. Alpha: the declaration half is built; dispatch, middleware, authentication, dependency injection and TLS are not.
+> cancho-web makes the API boundary a checked artifact of the program. A web layer for cancho, a typed systems language whose compiler states what a program may touch (`cancho authority`: for the users service, no files and no foreign code): each operation (route, parameters, body, responses) is declared once, and the router and an OpenAPI 3.1 document are made from that declaration. Request bodies are validated by cancho-schema, every error at once, as RFC 9457 problem+json. One thread, no Ffi, no C. Alpha: the declaration half is built; dispatch, middleware, authentication, dependency injection and TLS are not.
 
 ## Read first
 - [Overview](https://alpibrusl.github.io/cancho-web/): what it is, where it fits, the numbers.

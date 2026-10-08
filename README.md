@@ -4,7 +4,7 @@
 
 [![ci](https://github.com/alpibrusl/cancho-web/actions/workflows/ci.yml/badge.svg)](https://github.com/alpibrusl/cancho-web/actions/workflows/ci.yml)
 
-**Declare the API once.** A web layer for [cancho](https://github.com/alpibrusl/cancho), a typed systems language
+**Declare the API once.** cancho-web makes the API boundary a checked artifact of the program: one declaration defines the route, checks its inputs, generates the OpenAPI document, and is what CI tests. A web layer for [cancho](https://github.com/alpibrusl/cancho), a typed systems language
 with linear ownership and capability effects: routes with typed parameters, request bodies validated by
 [`cancho-schema`](https://github.com/alpibrusl/cancho-schema), `problem+json` errors, and an OpenAPI document generated from
 the same declarations -- on top of the `http.server` package that `cancho` ships (`packages/http-server/`). The
