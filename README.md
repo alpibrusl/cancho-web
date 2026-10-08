@@ -364,13 +364,14 @@ docs/authority.json       what the users service can touch, as last approved: ef
 deps/*.lock               the packages this builds against, pinned by hash
 tests/e2e.py              the end-to-end tests (real binary, real sockets, Schemathesis)
 tests/web_test.cho         unit tests of `web`: documents derived by hand, compared byte for byte
-benches/                  the benchmark: the FastAPI, Go and C implementations of the same
+benches/                  the benchmark: the FastAPI, Go (net/http, fasthttp), Rust (axum) and C implementations of the same
                           API, the load generator, and the checks that they do the same work
                           (`ab.sh` times two builds of the service, alternated: is a change free?)
 docs/design.md            what the framework layer will be, and what building the example found
 docs/benchmarks.md        the method, the numbers, and how to read them
 docs/index.html           the project page; examples.html and evidence.html beside it
 docs/logo.jpg             the logo as given; scripts/site_assets.py derives the page's images from it
+scripts/gen_site.py       writes the three pages, robots.txt and sitemap.xml (needs the cancho-gateway page for its CSS: GATEWAY_INDEX)
 scripts/figures.py        draws docs/figures/bench.svg from the table in this file
 ```
 
