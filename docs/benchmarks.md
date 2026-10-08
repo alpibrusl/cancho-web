@@ -567,3 +567,56 @@ Within the 5% this VM moves by, except the refusal of a parameter, which is 10% 
 hand-written code wrote one sentence. **The first implementation was slower on a read (0.93-0.94, in two runs)**: it scanned every record of the
 declaration for each request. Giving each operation an index and a chain of its own parameters removed that, and a pass that allocates nothing for
 a request that is fine removed the rest; `docs/design.md` §9.10.
+
+## Stronger yardsticks: Go fasthttp and Rust axum (2026-10-08)
+
+FastAPI is the comparison people ask for, but not the hardest one. Two more servers were written to the same
+workload as `benches/go_users` (same routes, same limits, hand-written range checks, same stored answer) and
+added to `benches/run.sh`, which gates them with `equivalent.py` (16 requests, all agree) and `edges.py` (84 cases,
+all agree except the two known ones, listed below) before any timing:
+
+* `benches/fasthttp_users`: Go with `valyala/fasthttp` v1.75.0, the Go server people reach for when `net/http` is
+  too slow. Its `go.mod` asks for Go 1.26.0, so it was built with that toolchain, while `go_users` was built with
+  1.24.7 on the same machine; the two Go servers are not the same compiler.
+* `benches/axum_users`: Rust, axum 0.8 on tokio's `current_thread` runtime (one thread, like everything else here),
+  serde_json into a struct with `deny_unknown_fields`, `TCP_NODELAY` on, release profile with LTO.
+
+One core each, median of 3, 5 s runs, in a single run of `run.sh` on one VM. This VM was slower than the one behind
+the tables above (cancho's GET one is 72,153 here against 83,289 there), so the numbers below are to be read against
+each other, not against those.
+
+| requests a second | GET one | page of 20 | rejected body | create |
+|---|---:|---:|---:|---:|
+| cancho | 72,153 | 62,320 | 55,136 | 42,562 |
+| Go fasthttp | **80,150** | 54,236 | 53,872 | **45,428** |
+| hand-written C (epoll) | 61,126 | 54,812 | 55,804 | 51,543 |
+| Go `net/http` | 43,616 | 36,259 | 32,841 | 27,991 |
+| Rust axum (one thread) | 39,747 | 38,803 | 33,196 | 32,241 |
+| FastAPI lean (uvloop + httptools) | 3,184 | 2,832 | 2,198 | 2,606 |
+
+GET one user, latency under that load, microseconds (p50 p90 p99 p99.9):
+
+| | p50 | p90 | p99 | p99.9 |
+|---|---:|---:|---:|---:|
+| cancho | 280 | 457 | 765 | 2,772 |
+| Go fasthttp | 262 | 440 | 739 | 2,270 |
+| Go `net/http` | 560 | 817 | 1,499 | 3,092 |
+| Rust axum | 533 | 763 | 1,196 | 2,759 |
+
+What it shows, and what it does not:
+
+* **fasthttp is faster than cancho on a single-user read** (80,150 against 72,153, 11% ahead) and on a create
+  (7% ahead); cancho is ahead on a page of 20 (15%) and about level on a rejected body (2%). The earlier claim that
+  cancho beats Go holds against `net/http`, the standard library; it does not hold against the Go server written
+  for speed. A service cancho-web builds is in the same league as that one, not above it.
+* **cancho is 1.3-1.8x ahead of axum** on one thread, and 1.5-1.7x ahead of `net/http`. axum here pays for tower's
+  layers, a `Router`, extractors and serde; it is the idiomatic way to write it, not the fastest Rust could be.
+  A hand-tuned `hyper` service would be nearer.
+* the hand-written C server is slower than cancho on the reads in this run (61,126 against 72,153), which it was
+  not in the run above (75,734 against 83,289). The C server did not change; the machine did, and C's two
+  numbers came out lower relative to the rest. Single runs on a shared VM move individual rows by 10% or more,
+  so none of the orderings within 10% of each other here (cancho, fasthttp, C) is established.
+* the repeated-key and lone-surrogate edge cases differ across servers by design (`edges.py` prints them):
+  cancho keeps the first of a repeated key, Go the last, axum refuses it (fasthttp's server accepts it; which key it keeps was not checked); a lone `\ud83d` escape is a
+  400 on cancho, axum and C, and a 201 on both Go servers.
+* not measured: more than one core for these two servers, memory, and start-up.

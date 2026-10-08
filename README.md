@@ -341,6 +341,8 @@ comparison does and does not show):
 A request costs the same in an API of 6, 206 or 2,006 operations (within 3.5%, the noise of the VM). At rest it is **1.8 MiB resident and starts in 4 ms**, 2.0 MiB with 100 idle connections (FastAPI: 47 MiB and half a second; Go: 7-12 MiB); the sizes
 are in [`docs/benchmarks.md`](docs/benchmarks.md#start-up-and-memory-2026-10-08), with what they do not show.
 
+Against the stronger yardsticks (a separate, slower run, [`docs/benchmarks.md`](docs/benchmarks.md#stronger-yardsticks-go-fasthttp-and-rust-axum-2026-10-08)): **Go's fasthttp is faster than cancho on a single-user read (11%) and a create (7%)**, cancho is ahead on a page of 20 (15%) and level on a rejected body, and cancho is 1.3-1.8x ahead of axum on one thread.
+
 On **two cores each** (two processes sharing a port, against FastAPI's two workers and Go on two cores) the gap with FastAPI
 narrows and does not close: 19-25x, against 23-27x on one core. One cancho process is 13-15x ahead of two FastAPI workers.
 
