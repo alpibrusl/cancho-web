@@ -934,22 +934,22 @@ fn run_pool[&h, &k, &l](heap: &!h Heap, clock: &k Clock, listener: &!l Listener,
                         borrow srv as &sr in {
                             borrow mut params as &!pw in {
                                 borrow mut scratch as &!cw in {
-                                  borrow mut cells as &!gw in {
-                                    borrow mut decode as &!xw in {
-                                    borrow api as &ar in {
-                                        borrow sc as &scr in {
-                                            borrow doc as &dr in {
-                                                let (o, n, c) = begin(heap, ar, scr, new_user, buffer.bytes(dr), server.head(sr), server.parsed(sr), contents(pw), contents(gw), contents(xw), server.body(sr), out, contents(cw));
-                                                out = o;
-                                                buffer.drop(heap, request);
-                                                request = n;
-                                                code = c;
-                                                keep = contents(cw)[rec_keep()] == 1;
+                                    borrow mut cells as &!gw in {
+                                        borrow mut decode as &!xw in {
+                                            borrow api as &ar in {
+                                                borrow sc as &scr in {
+                                                    borrow doc as &dr in {
+                                                        let (o, n, c) = begin(heap, ar, scr, new_user, buffer.bytes(dr), server.head(sr), server.parsed(sr), contents(pw), contents(gw), contents(xw), server.body(sr), out, contents(cw));
+                                                        out = o;
+                                                        buffer.drop(heap, request);
+                                                        request = n;
+                                                        code = c;
+                                                        keep = contents(cw)[rec_keep()] == 1;
+                                                    }
+                                                }
                                             }
                                         }
                                     }
-                                    }
-                                  }
                                 }
                             }
                         }
