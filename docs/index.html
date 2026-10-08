@@ -265,7 +265,7 @@ if id == 3 { return create(...); }</code></pre>
     <div><b>1.1&ndash;1.6&times;</b><span>Go <code>net/http</code>, with half the p99</span></div>
     <div><b>94%</b><span>of what one core can do over loopback TCP (a server that answers one canned reply)</span></div>
   </div>
-  <p class="note">None of this measures TLS, a real handler&rsquo;s work or more than one core. A service that spends 5 ms in a query is 5 ms slower in all of them.</p>
+  <p class="note">None of this measures TLS, a real handler&rsquo;s work or more than one core (the two-thread example is measured in <a href="evidence.html#threads">the evidence</a>). A service that spends 5 ms in a query is 5 ms slower in all of them.</p>
 </section>
 
 <section id="fit">
@@ -274,13 +274,13 @@ if id == 3 { return create(...); }</code></pre>
   <div class="fitwrap"><table class="fit wide">
     <thead><tr><th></th><th>You write</th><th>You get</th><th>You give up</th></tr></thead>
     <tbody>
-      <tr class="us"><th>cancho-web</th><td>An operation declaration, a handler that matches on the route id, your own loop</td><td>A contract that cannot drift from the routes, every body error at once, one thread, a report of what the program can touch</td><td>Dependency injection, middleware, <code>async</code>, TLS, a docs UI, several cores, for now</td></tr>
+      <tr class="us"><th>cancho-web</th><td>An operation declaration, a handler that matches on the route id, your own loop</td><td>A contract that cannot drift from the routes, every body error at once, one thread, a report of what the program can touch</td><td>Dependency injection, middleware, <code>async</code>, a docs UI, for now; TLS and threads exist in cancho but nothing here has been built on them</td></tr>
       <tr><th>FastAPI</th><td>Decorated functions and pydantic models</td><td>Dependency injection, <code>async</code>, <code>/docs</code>, a large ecosystem</td><td>An order of magnitude of per-core speed in this test; a checked statement of what the program can do</td></tr>
     </tbody>
   </table></div>
   <div class="cols">
     <div><h3>Built for</h3><ul><li>JSON APIs behind a TLS-terminating front</li><li>A contract you want diffed in review</li><li>Services where &ldquo;what can it touch?&rdquo; has to have an answer</li></ul></div>
-    <div class="no"><h3>Not for</h3><ul><li>The public edge, until it has TLS</li><li>Anything that needs authentication, middleware or dependency injection today</li><li>Streaming bodies, or more than one core in one process</li></ul></div>
+    <div class="no"><h3>Not for</h3><ul><li>The public edge, until a service is put behind cancho&rsquo;s TLS server (it exists; this layer has not been tried with it)</li><li>Anything that needs authentication, middleware or dependency injection today</li><li>Streaming bodies, or a store shared between threads</li></ul></div>
   </div>
 </section>
 
@@ -327,7 +327,7 @@ curl -s -XPOST -H 'Content-Type: application/json' -d '{"name":"Ada","age":36}' 
       <tr><th>With PostgreSQL</th><td>the network, and one random-file read for the login; nothing foreign</td></tr>
     </tbody>
   </table></div>
-  <p class="note">One thread, a <code>Poller</code>. More cores are more processes (<code>reuseport</code>) or, in <code>examples/users_threads</code>, the same loop in two threads of one process.</p>
+  <p class="note">One thread, a <code>Poller</code>. More cores are more processes (<code>reuseport</code>) or, in <code>examples/users_threads</code>, the same loop in two threads of one process (cancho has threads; that example shares no state, so it is not a deployable service).</p>
 </section>
 
 <aside class="status" id="status">
@@ -335,7 +335,8 @@ curl -s -XPOST -H 'Content-Type: application/json' -d '{"name":"Ada","age":36}' 
   <p class="note" style="margin:.2rem 0 .6rem">Alpha means the interfaces may change and nothing here is certified for production.</p>
   <ul>
     <li><strong>Not built yet:</strong> dispatch (the handler is still an <code>if</code> on the route id), and parameter validation by construction: a path or query parameter that fails its schema is still a check the handler makes. <a href="https://github.com/alpibrusl/cancho-web/blob/main/docs/design.md">The design for it</a> is written (§9) and not yet built.</li>
-    <li><strong>No middleware, authentication or dependency injection</strong>; nothing checks a token. No TLS, no streaming bodies, one core per process.</li>
+    <li><strong>No middleware, authentication or dependency injection</strong>; nothing checks a token.</li>
+    <li><strong>TLS, threads and streaming exist in cancho and are not used here.</strong> cancho has a TLS 1.3 server (not independently reviewed) and an <code>http.server</code> that a terminator can drive (<code>examples/https_hello</code>); no service in this repository has been put behind it, so terminate TLS in front. Threads run the loop twice in <code>examples/users_threads</code>, with a store each; a store they share is not built. <code>http.server</code> can stream a response; <code>web</code> cannot declare one yet.</li>
     <li>Responses are documented, not enforced: nothing checks that a handler answered what it declared. The contract tests do, from outside, for every request.</li>
     <li>The generated JSON Schema has no <code>$ref</code>/<code>$defs</code> of its own.</li>
     <li>The benchmark is one VM, one run. The ratios are the finding; the absolute figures are that VM&rsquo;s.</li>

@@ -19,7 +19,7 @@ not do the fifth.
 | error responses | `application/problem+json`, produced by the layer, never by hand |
 | OpenAPI + `/docs` | `GET /openapi.json` generated from the route table at start-up; a docs UI later, as static content |
 | dependency injection | **not done.** Lex has no closures and no reflection; "dependencies" are the arguments a handler is given, explicit and visible in its signature (and so in its authority) |
-| `async`/`await` | **not done.** One thread, a `Poller`, no blocking call; more cores by `reuseport` and more processes |
+| `async`/`await` | **not done.** One thread, a `Poller`, no blocking call; more cores by `reuseport` and more processes, or threads (`examples/users_threads`, §10) |
 
 It sits on `http.server`, the package `cancho` ships in `packages/http-server/`
 (`docs/http-server.md` there): sockets, framing, pipelining, back-pressure,
@@ -105,9 +105,10 @@ Each is a thing that runs and is tested before the next starts.
 2. **Versioning against the compiler.** A `cancho` store records no hash of
    the `std` it was published against, so this repository's CI pins a `cancho`
    release explicitly.
-3. **Streaming.** `http.server` hands over whole requests. Bodies larger than
-   its buffer (413 today), `Expect: 100-continue` and TLS are its open items
-   (`cancho` `docs/server.md` §6), and this layer inherits them.
+3. **Streaming and TLS.** `http.server` hands over whole requests: bodies larger than its buffer are a 413 today, and `Expect: 100-continue`
+   is open. *Corrected 2026-10-08: this item used to list TLS as open too. `cancho` now has a TLS 1.3 server and `http.server` a byte-fed
+   mode that a terminator drives (`docs/http-server.md` section 11, `examples/https_hello`), and a response can be streamed. This layer
+   uses neither: see §10.*
 
 ## 7. What building a real service found
 
@@ -166,7 +167,7 @@ a design point for the framework layer: a value validated on the way in and rend
 the program itself should not be validated again on the way out. `put_fragment` stays
 for what the program did *not* render.
 
-**What the example does not test yet:** TLS, streaming bodies, more than one core.
+**What the example does not test yet:** TLS, streaming bodies, shared state between threads (§10 says what exists in `cancho` for each).
 
 ## 8. The declaration half, built
 
@@ -400,3 +401,20 @@ and the check that the slot API is not shaped to one example.
 5. **Headers.** The slot table covers them identically (`b = 0` when absent), but header names
    are case-insensitive and `http.header` is the existing lookup; `lexsys-hooks`'s
    `Idempotency-Key` is the case to design against.
+
+## 10. What `cancho` has now that `web` has not been tried with
+
+*Written 2026-10-08, after the README and this document were found to say that TLS and more than one core did not exist.* Read from `cancho`'s own documents; nothing here was run.
+
+* **TLS.** `packages/tls` has a TLS 1.3 server (`docs/tls-server.md`; *not independently reviewed*), and `http.server` has a byte-fed mode
+  (`open_bytes`, `attach`, `input`, `output`: `docs/http-server.md` section 11) in which the application moves the bytes, which is what a
+  terminator in front of it does. `examples/https_hello` is the two in one program. A `web` service keeps its loop, so this layer is not in
+  the way; what is missing is a service, a test and a measurement. The authority report would also change: TLS reads a certificate and
+  random bytes, and the users service's report names no files today. **Until that is built and measured, the claim stays "behind a
+  TLS-terminating front".**
+* **Threads.** `spawn` and `join` are real `pthread`s (`docs/threads.md`); `docs/parallelism.md` section 9 gives a second thread its own
+  heap and clock. `examples/users_threads` is the unchanged `users` loop in two of them, and it measured no worse than two processes
+  (`docs/benchmarks.md`). It shares nothing, so it is not a deployable service, and the section of `parallelism.md` on a shared store is
+  where that would begin.
+* **Streaming a response** is `stream` in `http.server`. `web` has no way to declare it (`respond` declares a body of one schema), and
+  the OpenAPI side of it (a `text/event-stream`, a download) is not designed.

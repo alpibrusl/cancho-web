@@ -158,7 +158,7 @@ table.fit.num thead th + th { text-align: right; }
     </ul></div>
     <div class="no"><h3>Not claimed</h3><ul>
       <li>That it beats C: it is level on a read and 12&ndash;33% behind on the other three.</li>
-      <li>Anything about several cores, TLS, a real handler&rsquo;s work, memory or start-up time: none was measured.</li>
+      <li>Anything about TLS, a real handler&rsquo;s work, memory or start-up time: none was measured. About several cores, only the two-thread example below.</li>
       <li>That the absolute figures hold on another machine. One 4-vCPU VM, one run; repeats differ by about 5%, and a create by up to 10%.</li>
       <li>That responses are enforced: they are documented, and checked from outside.</li>
     </ul></div>
@@ -229,7 +229,7 @@ table.fit.num thead th + th { text-align: right; }
     </ul></div>
     <div class="no"><h3>Not measured</h3><ul>
       <li>Go with more than one core, or with Gin or fasthttp; Rust; Node.</li>
-      <li>A second core for cancho (<code>reuseport</code> copies); TLS; a real handler&rsquo;s work; resident memory and start-up time.</li>
+      <li>Several cores beyond the one two-thread comparison below, and <code>reuseport</code> copies for the in-memory service; TLS; a real handler&rsquo;s work; resident memory and start-up time.</li>
       <li>FastAPI&rsquo;s usual deployment: several worker processes. This is one core against one core.</li>
     </ul></div>
   </div>
@@ -258,6 +258,16 @@ table.fit.num thead th + th { text-align: right; }
 <tr><th>pool, 4 connections</th><td class="n">45,056</td><td class="n">7,420</td><td class="n">8,091 (6,836&ndash;10,776)</td></tr>
 </tbody></table></div>
   <p class="note">More connections make reads slower (PostgreSQL&rsquo;s backends share its one core) and a write wants several. The pool&rsquo;s write median beats four copies&rsquo;, but the ranges overlap. It does not reconnect after a database restart (database routes answer 503 until the service is restarted) and has no per-request deadline.</p>
+</section>
+
+<section id="threads">
+  <h2>Two threads in one process</h2>
+  <p class="sub"><code>examples/users_threads</code> runs the unchanged <code>users</code> loop in two threads of one process: one <code>SO_REUSEPORT</code> listener, a forked heap and a forked clock each (cancho&rsquo;s <code>docs/parallelism.md</code> section 9). The workload is the invalid <code>POST /users</code>, server on cores 0&ndash;1, load generator on 2&ndash;3, interleaved with two processes in three rounds of five runs.</p>
+  <div class="stats">
+    <div><b>149,380</b><span>requests a second, two threads (median of 15)</span></div>
+    <div><b>141,208</b><span>two processes</span></div>
+  </div>
+  <p class="note">The ranges overlap almost completely, so the finding is that threads are <em>not worse</em>, not that they are faster. A stateless service shares nothing either way. What threads add is the possibility of sharing a store, which is not built: each thread keeps its own, so this example is not a deployable service.</p>
 </section>
 
 <section id="found">
@@ -290,7 +300,7 @@ table.fit.num thead th + th { text-align: right; }
     <div class="no"><h3>Not built</h3><ul>
       <li>Dispatch, and parameters validated before the handler runs.</li>
       <li>Middleware, authentication, dependency injection.</li>
-      <li>TLS, streaming bodies, more than one core in one process (two threads share nothing).</li>
+      <li>TLS (cancho has a server, <code>examples/https_hello</code>, not independently reviewed; no service here has been put behind it), streaming a response, a store shared between threads (the two threads of <code>users_threads</code> share nothing).</li>
       <li><code>$ref</code>/<code>$defs</code> in the generated JSON Schema.</li>
     </ul></div>
     <div class="no"><h3>Not tested</h3><ul>

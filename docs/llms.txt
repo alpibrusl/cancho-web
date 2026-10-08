@@ -18,4 +18,7 @@
 - Benchmarks are one VM, one run, one core each: 15-26x FastAPI, 1.1-1.6x Go net/http, level with a hand-written C server on a read and 12-33% behind it on the rest.
 
 ## Not built
-Dispatch and parameter validation by construction, middleware, authentication, dependency injection, TLS, streaming bodies, more than one core in one process.
+Dispatch and parameter validation by construction, middleware, authentication, dependency injection.
+
+## In cancho, not used here
+cancho has a TLS 1.3 server (not independently reviewed) and an http.server that a terminator can drive (examples/https_hello): no service in this repository has been put behind it, so terminate TLS in front. cancho has threads: examples/users_threads runs the loop in two, each with its own store (not a deployable service). http.server can stream a response: web cannot declare one yet.

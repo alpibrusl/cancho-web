@@ -345,8 +345,23 @@ Not yet built:
 
 Dispatch and parameter validation by construction (a path or query parameter that fails its
 schema is still a check the handler makes); middleware, auth, and anything like FastAPI's
-dependency injection; TLS; streaming bodies; more than one core; `$ref`/`$defs` in the generated
-JSON Schema. The design document says which of these are decided and which are open.
+dependency injection; `$ref`/`$defs` in the generated JSON Schema. The design document says which
+of these are decided and which are open.
+
+What `cancho` has now that this layer has not been tried with (corrected 2026-10-08; this file used to list all three as
+missing):
+
+* **TLS.** `cancho` has a TLS 1.3 server (`packages/tls`; its own notes say it has not been independently reviewed) and
+  `http.server` can be driven by bytes instead of sockets (`docs/http-server.md` section 11), which is how its
+  `examples/https_hello` serves HTTPS with keep-alive and pipelining. The loop here is the application's own, so
+  nothing in `web` stands in the way, but **no service in this repository has been put behind it**: no example, no
+  test, no measurement. Until one is, terminate TLS in front.
+* **More than one core.** `cancho` has threads (`spawn` and `join`). `examples/users_threads` runs the unchanged loop in two
+  of them (one heap and one clock each, one `SO_REUSEPORT` listener) and measured no worse than two processes
+  ([`docs/benchmarks.md`](docs/benchmarks.md#two-threads-in-one-process)). Each thread keeps its own store, so it is not a
+  deployable service: a store the threads share is not built.
+* **Streaming.** `http.server` can stream a *response*; this layer does not use it. A request body is still read whole
+  (a `413` past its buffer).
 
 ## Learn more
 
