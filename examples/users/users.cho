@@ -633,16 +633,21 @@ fn main(world: World) -> [] int {
     release(fs);
     release(ffi);
     var port = 0 - 1;
+    var reuse = 0;
     borrow args as &g in {
         if arg_count(g) > 1 {
             port = number_of(arg(g, 1));
+        }
+        // `users <port> reuseport`: several copies may listen on one port, each with its own store (`benches/run_cores.sh`).
+        if arg_count(g) > 2 {
+            reuse = 1;
         }
     }
     var status = 2;
     if port > 0 && port < 65536 {
         status = 3;
         borrow net as &nn in {
-            match tcp_listen(nn, port, 1024, 0) {
+            match tcp_listen(nn, port, 1024, reuse) {
                 Listening::Ok(l) => {
                     var listener = l;
                     borrow mut listener as &!lh in {
