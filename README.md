@@ -22,13 +22,15 @@ and by Schemathesis, and benchmarked against FastAPI, Go and C ([below](#benchma
 [`src/web.cho`](src/web.cho) declares each operation once -- its route, parameters, body and
 responses -- and the router and the OpenAPI document both come from that declaration
 (the document is checked in as [`examples/users/openapi.json`](examples/users/openapi.json),
-so a change to the API is a change to a file). Not yet: dispatch -- the handler is still an
-`if` on the route id and still checks its own path and query parameters -- and middleware
-([`docs/design.md`](docs/design.md) §8 says what is next and why, §9 designs parameters validated by construction).
+so a change to the API is a change to a file). `web.dispatch` judges a request's path, query and header parameters with the
+schema nodes that document them *before* the handler runs, so the handler is not reached for a request that breaks the
+contract (`examples/users` uses it; [`docs/design.md`](docs/design.md) §9). Not yet: middleware, and defaults declared
+once ([`docs/design.md`](docs/design.md) §8 and §9.10 say what is next and why).
 
 ## What you get
 
 * **One declaration.** An operation's route, parameters, body and responses are written once; the router and the OpenAPI 3.1 document are made from it, so a route cannot be served and undocumented.
+* **Parameters judged before the handler.** `web.dispatch` checks every declared path, query and header parameter against its schema node, refuses an unknown or repeated query key, and answers the 404, the 405 or the 422 itself; the handler reads valid values from a slot table.
 * **Every error at once.** A body that breaks the rules gets all of its errors, each with its JSON Pointer, as RFC 9457 `application/problem+json`. No coercion.
 * **A contract that is a file.** The served document is byte for byte the checked-in `openapi.json`, and Schemathesis generates requests from it.
 * **Who may call, declared.** Bearer schemes, `require` and `no_auth` are written to the document and can be read back; nothing here checks a token.
@@ -149,8 +151,9 @@ Content-Type: application/problem+json
 
 $ curl -i 'localhost:8080/users?limit=0'
 HTTP/1.1 422 Unprocessable Content
+Content-Type: application/problem+json
 
-{"type":"about:blank","title":"Unprocessable Content","status":422,"detail":"limit must be an integer from 1 to 100"}
+{"type":"about:blank","title":"Unprocessable Content","status":422,"count":1,"errors":[{"pointer":"/query/limit","code":"minimum","detail":"is below the minimum"}]}
 ```
 
 | | |
@@ -168,7 +171,7 @@ leaves a hole, ids are not reused.
 
 [`examples/users_pg`](examples/users_pg/users_pg.cho) is this service with a table behind it: the same routes,
 the same schema nodes, the same OpenAPI document (plus a `pattern` on `name` and `email`, which refuse
-U+0000 because PostgreSQL text cannot hold it) and the same answers, byte for byte, and the end-to-end suite,
+U+0000 because PostgreSQL text cannot hold it) and the same answers, byte for byte (except the `422` for a bad parameter: `users_pg` has not been moved to `web.dispatch`), and the end-to-end suite,
 Schemathesis included, runs against it unchanged (`USERS_PG=1 python3 tests/e2e.py`). It reaches the
 database through functions that `pgen` (in [`cancho-pg`](https://github.com/alpibrusl/cancho-pg)) wrote from
 [`queries.sql`](examples/users_pg/queries.sql) by asking the server what each statement's parameters and
@@ -226,9 +229,27 @@ api = web.respond(heap, api, op_get, 200, "the user", user);
 api = web.respond_problem(heap, api, op_get, 404);
 api = web.respond_problem(heap, api, op_get, 422);
 ...
-let id = web.find(api, http.method(request, table), path, params);   // in handle
-if id == 3 { return create(heap, sc, new_user, store, request, table, body, out, keep); }
+let (routed, id) = web.dispatch(heap, api, sc, request, table, params, args, scratch, out, keep);   // in handle
+if id == web.answered() { return (routed, store); }       // the 404, 405 or 422 is already written
+if id == 3 { return create(heap, sc, new_user, store, request, table, body, routed, keep); }
 ```
+
+`dispatch` is called in the application's loop where `web.find` was; it is not a callback and keeps nothing. For a request that
+has a route and valid parameters it answers the route id and fills `args`, two ints for each declared parameter, in the order
+they were declared; the slots are learned once at start-up:
+
+```
+let limit_slot = web.slot(api, op_list, "limit");          // once, by name
+...
+if web.present(args, limit_slot) { limit = web.int_arg(args, limit_slot); }   // a valid int, 1..100: dispatch judged it
+```
+
+A parameter that breaks its node is a `422` that lists every error, with where it is (`/query/limit`, `/path/id`,
+`/header/Idempotency-Key`) and a code a client can switch on (`type`, `range`, `minimum`, `maximum`, `min_length`,
+`max_length`, `choice`, `required`, `unknown`, `duplicate`, `nul`). A path or query value is judged decoded (`%35` is `5`; in a
+query `+` is a space); an integer is digits and nothing else (`5.0`, `+5` and `0x5` are `type`). `web.slot`, `web.most_args`,
+`web.int_arg`, `web.bool_arg`, `web.present`, `web.text_start` and `web.text_end` are the accessors; `web.find` is
+unchanged and `examples/users_pg` and `examples/users_threads` still use it.
 
 Who may call an operation is declared the same way, and only the document is affected (the
 application's own gate still decides): `web.bearer_scheme(heap, api, "admin", "the admin token")`,
@@ -332,6 +353,7 @@ tests/e2e.py              the end-to-end tests (real binary, real sockets, Schem
 tests/web_test.cho         unit tests of `web`: documents derived by hand, compared byte for byte
 benches/                  the benchmark: the FastAPI, Go and C implementations of the same
                           API, the load generator, and the checks that they do the same work
+                          (`ab.sh` times two builds of the service, alternated: is a change free?)
 docs/design.md            what the framework layer will be, and what building the example found
 docs/benchmarks.md        the method, the numbers, and how to read them
 docs/index.html           the project page; examples.html and evidence.html beside it
@@ -343,10 +365,10 @@ scripts/figures.py        draws docs/figures/bench.svg from the table in this fi
 
 Not yet built:
 
-Dispatch and parameter validation by construction (a path or query parameter that fails its
-schema is still a check the handler makes); middleware, auth, and anything like FastAPI's
-dependency injection; `$ref`/`$defs` in the generated JSON Schema. The design document says which
-of these are decided and which are open.
+Middleware, auth, and anything like FastAPI's dependency injection; defaults declared once
+(a handler still says what `limit` is when it is absent); `$ref`/`$defs` in the generated JSON Schema; `dispatch` in
+`examples/users_pg` and `examples/users_threads`, which keep `web.find` and their own checks (so their answer to a bad parameter
+is still the old sentence). The design document says which of these are decided and which are open.
 
 What `cancho` has now that this layer has not been tried with (corrected 2026-10-08; this file used to list all three as
 missing):

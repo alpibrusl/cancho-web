@@ -177,6 +177,7 @@ table.fit.num thead th + th { text-align: right; }
       <tr><th>The wire</th><td>Pipelining, keep-alive, 8 concurrent clients, an oversized body, and two pipelined <code>204</code>s and a <code>200</code> staying framed.</td></tr>
       <tr><th>Validation edges</th><td>Every error at once with its pointer, no coercion, <code>150.0</code> as an integer, string length in code points.</td></tr>
       <tr><th>Unit tests of <code>web</code></th><td>Documents derived by hand, compared byte for byte, for a minimal API, shared path parameters with <code>$ref</code>s and the problem response, query/body/header/hidden routes with the routing the declaration also made, security alternatives, header parameters and words.</td></tr>
+      <tr><th>Unit tests of <code>dispatch</code></th><td>Seven tests with a case for every refusal code, in each place a parameter can be (path, query, header), for several errors at once, for two path parameters, for what must <em>not</em> be refused, for 2,000 unknown keys, 2,000 copies of a known one, a 20,000-byte key, <code>%zz</code>, <code>%ff</code>, <code>%00</code> and a scratch buffer too small. Twenty deliberate breakages of the code each fail one of them.</td></tr>
       <tr><th>The comparison servers</th><td><code>benches/check.sh</code>: the Go and C implementations still do the same work as the service. <code>benches/equivalent.py</code> sends the same 16 requests to every implementation and refuses to time anything unless every status and every successful body agrees; <code>benches/edges.py</code> adds 84 more.</td></tr>
     </tbody>
   </table></div>
@@ -235,6 +236,21 @@ table.fit.num thead th + th { text-align: right; }
   </div>
 </section>
 
+<section id="dispatch">
+  <h2>What dispatch cost</h2>
+  <p class="sub"><code>benches/ab.sh</code> alternates two builds of <code>examples/users</code> round by round, so a drift of the machine lands on both: <code>main</code> (the handler checks its parameters) against <code>web.dispatch</code>. The workloads of the benchmark above plus <code>GET /users?limit=0</code>, six rounds. <strong>This VM is slower than the one above</strong> (a read here is about 86,000 a second), so only the ratios mean anything.</p>
+<div class="fitwrap"><table class="fit num">
+<thead><tr><th>requests a second, median of 6</th><th>before</th><th>after</th><th>after / before</th></tr></thead>
+<tbody>
+<tr><th>GET one user</th><td class="n">86,140</td><td class="n">84,816</td><td class="n">0.985</td></tr>
+<tr><th>GET a page of 20</th><td class="n">76,294</td><td class="n">74,451</td><td class="n">0.976</td></tr>
+<tr><th>POST, invalid body (422)</th><td class="n">63,011</td><td class="n">62,739</td><td class="n">0.996</td></tr>
+<tr><th>POST, create</th><td class="n">55,507</td><td class="n">54,559</td><td class="n">0.983</td></tr>
+<tr><th>GET /users?limit=0 (a parameter refused)</th><td class="n">81,516</td><td class="n">73,011</td><td class="n">0.896</td></tr>
+</tbody></table></div>
+  <p class="note">Within the 5% this VM moves by, except the refusal of a parameter, which is 10% slower: it judges the request twice and builds a JSON document per error where the hand-written code wrote one sentence. <strong>The first implementation was slower on a read (0.93&ndash;0.94, in two runs)</strong>: it scanned every record of the declaration for each request. An index and a chain of each operation&rsquo;s own parameters removed that, and a pass that allocates nothing for a request that is fine removed the rest.</p>
+</section>
+
 <section id="postgres">
   <h2>On PostgreSQL</h2>
   <p class="sub"><code>examples/users_pg</code> against the same API in FastAPI twice, because &ldquo;FastAPI with a database&rdquo; is not one number. Server on core 0, <strong>PostgreSQL 16 on core 1</strong> (default settings, <code>fsync</code> on), load generator on cores 2 and 3. A create is a fixed 20,000 requests against a fresh table.</p>
@@ -289,6 +305,7 @@ table.fit.num thead th + th { text-align: right; }
     <div><h3>In the benchmark</h3><ul>
       <li>The load generator matched <code>Content-Length:</code> case-sensitively, and uvicorn sends it lowercase, so every answer&rsquo;s body was counted as the next response. The figures were plausible (about 5,000 a second) and wrong. It is caught now because the generator checks every status against the one expected. A benchmark that cannot fail is not a measurement.</li>
       <li>The page endpoint was 0.62&times; of Go, for two reasons, both fixed: re-validating the program&rsquo;s own output, and the copy above.</li>
+      <li>The first <code>dispatch</code> cost a read 6.5%, and the cost grew with the size of the API, not the operation: a declaration with 200 routes would have paid for all of them on every request. Measured twice, then fixed with an index.</li>
       <li>The cross-checks disagreed with the references too: on a repeated key the service keeps the first, Go and pydantic the last; on a lone surrogate Go stores U+FFFD. Shown, not counted.</li>
     </ul></div>
   </div>
@@ -298,7 +315,7 @@ table.fit.num thead th + th { text-align: right; }
   <h2>Not tested, not built</h2>
   <div class="cols">
     <div class="no"><h3>Not built</h3><ul>
-      <li>Dispatch, and parameters validated before the handler runs.</li>
+      <li>Defaults declared once; <code>dispatch</code> in the PostgreSQL and threads examples.</li>
       <li>Middleware, authentication, dependency injection.</li>
       <li>TLS (cancho has a server, <code>examples/https_hello</code>, not independently reviewed; no service here has been put behind it), streaming a response, a store shared between threads (the two threads of <code>users_threads</code> share nothing).</li>
       <li><code>$ref</code>/<code>$defs</code> in the generated JSON Schema.</li>

@@ -403,3 +403,24 @@ The client under this service, one connection against libpq and the Python clien
 
 [`examples/users_threads`](../examples/users_threads/users_threads.cho) runs the unchanged `users` loop in two threads, one `SO_REUSEPORT` listener, forked heap and forked clock each (cancho `docs/parallelism.md` section 9). Same workload as "Copies of the blocking service" (invalid `POST /users`, server on cores 0-1, load generator on 2-3), interleaved with two processes in three rounds of five runs: **threads 149,380 a second** (median of 15), **processes 141,208**; the ranges overlap almost completely, so the result is that threads are *not worse*, not that they are faster. A stateless service shares nothing either way; what threads add is the possibility of sharing a store, which is not built (each thread keeps its own, so this example is not a deployable service). Reproduced by cancho's `benches/parallel/threads_users.sh`.
 
+
+## Dispatch: a change measured (2026-10-08)
+
+`web.dispatch` (`docs/design.md` §9) judges the declared parameters of every request before the handler runs. Whether that was free is
+what `benches/ab.sh` answers: two builds of `examples/users` (`main` and the branch), alternated round by round so a drift of the machine lands on
+both, on the workloads above plus `GET /users?limit=0`, six rounds, server on core 0, `kload` on cores 2 and 3.
+
+**This VM is slower than the one above** (a read here is about 86,000 a second, not 129,000), so only the ratios mean anything.
+
+| requests a second, median of 6 | before | after | after / before |
+|---|---:|---:|---:|
+| GET one user | 86,140 | 84,816 | 0.985 |
+| GET a page of 20 | 76,294 | 74,451 | 0.976 |
+| POST, invalid body (422) | 63,011 | 62,739 | 0.996 |
+| POST, create | 55,507 | 54,559 | 0.983 |
+| GET `/users?limit=0` (a parameter refused) | 81,516 | 73,011 | **0.896** |
+
+Within the 5% this VM moves by, except the refusal of a parameter, which is 10% slower: two passes over the request, and a JSON document per error where the
+hand-written code wrote one sentence. **The first implementation was slower on a read (0.93-0.94, in two runs)**: it scanned every record of the
+declaration for each request. Giving each operation an index and a chain of its own parameters removed that, and a pass that allocates nothing for
+a request that is fine removed the rest; `docs/design.md` §9.10.

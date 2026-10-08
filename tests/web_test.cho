@@ -1,5 +1,6 @@
 import std.buffer;
 import std.bytes;
+import std.http;
 import std.test;
 import schema;
 import web;
@@ -226,5 +227,466 @@ fn test_asking_who_may_call[&h](heap: &!h Heap) -> [heap] int {
         test.assert(!web.is_open(br, y));
     }
     web.drop(heap, bare);
+    return 0;
+}
+
+// ---------------------------------------------------------------------
+// Dispatch: the parameters of a request, judged by the nodes that document them
+// (`docs/design.md` section 9)
+// ---------------------------------------------------------------------
+
+// Where `needle` first occurs in `hay`, or -1.
+fn index_of[&a, &b](hay: &a [byte], needle: &b [byte]) -> [] int {
+    var i = 0;
+    while i + len(needle) <= len(hay) {
+        if bytes.equal(hay[i..i + len(needle)], needle) {
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn put_int[&h](heap: &!h Heap, b: buffer.Buffer, n: int) -> [heap] buffer.Buffer {
+    if n < 0 {
+        return buffer.push_nat(heap, buffer.push(heap, b, byte_of(45)), 0 - n);
+    }
+    return buffer.push_nat(heap, b, n);
+}
+
+// `status|body` of a whole answer; and the `Content-Length` it carried must be the body's length.
+fn describe_answer[&h, &a](heap: &!h Heap, b: buffer.Buffer, answer: &a [byte]) -> [heap] buffer.Buffer {
+    let blank = index_of(answer, "\r\n\r\n");
+    test.assert(blank > 0);
+    let body = answer[blank + 4..len(answer)];
+    let at = index_of(answer, "Content-Length: ");
+    test.assert(at > 0);
+    var n = 0;
+    var k = at + 16;
+    while int_of(answer[k]) != 13 {
+        n = n * 10 + (int_of(answer[k]) - 48);
+        k = k + 1;
+    }
+    test.assert_eq(n, len(body));
+    var out = buffer.append(heap, b, answer[9..12]);
+    out = buffer.push(heap, out, byte_of(124));
+    return buffer.append(heap, out, body);
+}
+
+// What `web.dispatch` does with `raw`: for an answer, `status|body`; for a route, `id` followed by
+// `|a,b` for each of the first `nargs` slots. `scratch_len` is the room to decode one value.
+fn outcome[&h, &a, &s, &r](heap: &!h Heap, api: &a web.Api, sc: &s schema.Schema, raw: &r [byte], scratch_len: int, nargs: int) -> [heap] buffer.Buffer {
+    let table = box_slice(heap, 80, 0);
+    let params = box_slice(heap, 2 * web.most_params(api) + 2, 0);
+    let args = box_slice(heap, web.most_args(api), 0);
+    let scratch = box_slice(heap, scratch_len, byte_of(0));
+    var result = buffer.empty(heap, 64);
+    var out = buffer.empty(heap, 64);
+    borrow mut table as &!tw in {
+        test.assert(http.parse(raw, contents(tw)) >= 0);
+        borrow mut params as &!pw in {
+            borrow mut args as &!aw in {
+                borrow mut scratch as &!cw in {
+                    let (answer, id) = web.dispatch(heap, api, sc, raw, contents(tw), contents(pw), contents(aw), contents(cw), out, true);
+                    out = answer;
+                    if id == web.answered() {
+                        borrow out as &ob in {
+                            result = describe_answer(heap, result, buffer.bytes(ob));
+                        }
+                    } else {
+                        result = put_int(heap, result, id);
+                        let seen = contents(aw);
+                        var k = 0;
+                        while k < nargs {
+                            result = buffer.push(heap, result, byte_of(124));
+                            result = put_int(heap, result, seen[2 * k]);
+                            result = buffer.push(heap, result, byte_of(44));
+                            result = put_int(heap, result, seen[2 * k + 1]);
+                            k = k + 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    buffer.drop(heap, out);
+    unbox_slice(heap, scratch);
+    unbox_slice(heap, args);
+    unbox_slice(heap, params);
+    unbox_slice(heap, table);
+    return result;
+}
+
+fn is[&h, &a, &s, &r, &w](heap: &!h Heap, api: &a web.Api, sc: &s schema.Schema, raw: &r [byte], nargs: int, want: &w [byte]) -> [heap] int {
+    let got = outcome(heap, api, sc, raw, 64, nargs);
+    borrow got as &g in {
+        test.assert(bytes.equal(buffer.bytes(g), want));
+    }
+    buffer.drop(heap, got);
+    return 0;
+}
+
+// /health                   no parameters
+// /items                    ?limit 1..100  ?offset 0..1000  ?role admin|user  ?q 1..8 chars  ?verbose bool   (slots 0..4)
+// /items/:id                :id 1..99, header Idempotency-Key 1..8 chars (slots 0, 1)
+// /req                      ?need 0..9 required, header X-Trace 1..8 chars required (slots 0, 1)
+// /pairs/:a/:b              two path parameters, 1..99 each (slots 0, 1)
+fn dispatch_api[&h](heap: &!h Heap) -> [heap] (web.Api, schema.Schema) {
+    var s = schema.empty(heap);
+    let (s1, limit) = schema.new_int(heap, s, 1, 100);
+    let (s2, offset) = schema.new_int(heap, s1, 0, 1000);
+    let (s3, role) = schema.new_string(heap, s2, 0, schema.int_max());
+    let (s4, q) = schema.new_string(heap, s3, 1, 8);
+    let (s5, verbose) = schema.new_bool(heap, s4);
+    let (s6, id) = schema.new_int(heap, s5, 1, 99);
+    let (s7, need) = schema.new_int(heap, s6, 0, 9);
+    s = schema.add_choice(heap, s7, role, "admin");
+    s = schema.add_choice(heap, s, role, "user");
+    s = schema.add_choice(heap, s, role, "two words");
+    s = schema.forbid_nul(s, q);
+    var api = web.empty(heap);
+    let (a1, health) = web.operation(heap, api, "GET", "/health", "health");
+    let (a2, items) = web.operation(heap, a1, "GET", "/items", "items");
+    api = web.query_param(heap, a2, items, "limit", limit, false);
+    api = web.query_param(heap, api, items, "offset", offset, false);
+    api = web.query_param(heap, api, items, "role", role, false);
+    api = web.query_param(heap, api, items, "q", q, false);
+    api = web.query_param(heap, api, items, "verbose", verbose, false);
+    let (a3, item) = web.operation(heap, api, "GET", "/items/:id", "item");
+    api = web.path_param(heap, a3, item, "id", id);
+    api = web.header_param(heap, api, item, "Idempotency-Key", q, false);
+    let (a4, req) = web.operation(heap, api, "GET", "/req", "req");
+    api = web.query_param(heap, a4, req, "need", need, true);
+    api = web.header_param(heap, api, req, "X-Trace", q, true);
+    let (a5, pair) = web.operation(heap, api, "GET", "/pairs/:a/:b", "pair");
+    api = web.path_param(heap, a5, pair, "a", id);
+    api = web.path_param(heap, api, pair, "b", id);
+    return (api, s);
+}
+
+fn test_dispatch_answers_the_route_and_the_values_of_its_parameters[&h](heap: &!h Heap) -> [heap] int {
+    let (api, s) = dispatch_api(heap);
+    borrow api as &ar in {
+        borrow s as &sr in {
+            // No parameters, and a query string the operation never reads is ignored, as it always was.
+            is(heap, ar, sr, "GET /health HTTP/1.0\r\n\r\n", 0, "1");
+            is(heap, ar, sr, "GET /health?x=1 HTTP/1.0\r\n\r\n", 0, "1");
+            // Everything absent: an integer or a bool is (0, 0), text is (-1, -1).
+            is(heap, ar, sr, "GET /items HTTP/1.0\r\n\r\n", 5, "2|0,0|0,0|-1,-1|-1,-1|0,0");
+            // Every value present: integers are their value and 1, text is where it is in the request head, a bool is 0 or 1.
+            is(heap, ar, sr, "GET /items?limit=5&offset=7&role=admin&q=ab&verbose=true HTTP/1.0\r\n\r\n", 5, "2|5,1|7,1|33,38|41,43|1,1");
+            is(heap, ar, sr, "GET /items?verbose=false HTTP/1.0\r\n\r\n", 5, "2|0,0|0,0|-1,-1|-1,-1|0,1");
+            // Order does not matter, nor do leading zeros, nor an `=`-less trailing `&`.
+            is(heap, ar, sr, "GET /items?offset=007&limit=100& HTTP/1.0\r\n\r\n", 2, "2|100,1|7,1");
+            // A path parameter, a header (found whatever its case) and a query string this operation does not read.
+            is(heap, ar, sr, "GET /items/5 HTTP/1.0\r\nIdempotency-Key: abc\r\n\r\n", 2, "3|5,1|40,43");
+            is(heap, ar, sr, "GET /items/5 HTTP/1.0\r\nidempotency-key: abc\r\n\r\n", 2, "3|5,1|40,43");
+            is(heap, ar, sr, "GET /items/5 HTTP/1.0\r\nIDEMPOTENCY-KEY: abc\r\n\r\n", 2, "3|5,1|40,43");
+            // A header is judged as sent: `%zz` is three characters of a header, not a bad escape.
+            is(heap, ar, sr, "GET /items/5 HTTP/1.0\r\nIdempotency-Key: %zz\r\n\r\n", 2, "3|5,1|40,43");
+            is(heap, ar, sr, "GET /items/5 HTTP/1.0\r\n\r\n", 2, "3|5,1|-1,-1");
+            is(heap, ar, sr, "GET /items/5?x=1 HTTP/1.0\r\n\r\n", 2, "3|5,1|-1,-1");
+            is(heap, ar, sr, "GET /req?need=3 HTTP/1.0\r\nX-Trace: t\r\n\r\n", 2, "4|3,1|35,36");
+            // Two path parameters are the first and the second capture of the pattern.
+            is(heap, ar, sr, "GET /pairs/3/4 HTTP/1.0\r\n\r\n", 2, "5|3,1|4,1");
+            // The slots are learned once, by name, in the order the parameters were declared; `most_args` is two ints for the widest operation.
+            test.assert_eq(web.slot(ar, 2, "limit"), 0);
+            test.assert_eq(web.slot(ar, 2, "verbose"), 4);
+            test.assert_eq(web.slot(ar, 3, "id"), 0);
+            test.assert_eq(web.slot(ar, 3, "Idempotency-Key"), 1);
+            test.assert_eq(web.slot(ar, 3, "limit"), 0 - 1);
+            test.assert_eq(web.slot(ar, 99, "limit"), 0 - 1);
+            test.assert_eq(web.most_args(ar), 10);
+        }
+    }
+    web.drop(heap, api);
+    schema.drop(heap, s);
+    return 0;
+}
+
+fn problem[&h, &w](heap: &!h Heap, count: int, errors: &w [byte]) -> [heap] buffer.Buffer {
+    var b = buffer.append(heap, buffer.empty(heap, 128), "422|{\"type\":\"about:blank\",\"title\":\"Unprocessable Content\",\"status\":422,\"count\":");
+    b = buffer.push_nat(heap, b, count);
+    b = buffer.append(heap, b, ",\"errors\":[");
+    b = buffer.append(heap, b, errors);
+    return buffer.append(heap, b, "]}");
+}
+
+// `raw` is refused with a 422 that says `count` errors, listing `errors`.
+fn refused[&h, &a, &s, &r, &w](heap: &!h Heap, api: &a web.Api, sc: &s schema.Schema, raw: &r [byte], count: int, errors: &w [byte]) -> [heap] int {
+    let want = problem(heap, count, errors);
+    borrow want as &wb in {
+        is(heap, api, sc, raw, 0, buffer.bytes(wb));
+    }
+    buffer.drop(heap, want);
+    return 0;
+}
+
+// Every code of `docs/design.md` section 9.4, on a query parameter.
+fn test_dispatch_refuses_a_query_parameter_by_rule[&h](heap: &!h Heap) -> [heap] int {
+    let (api, s) = dispatch_api(heap);
+    borrow api as &ar in {
+        borrow s as &sr in {
+            refused(heap, ar, sr, "GET /items?limit=0 HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/query/limit\",\"code\":\"minimum\",\"detail\":\"is below the minimum\"}");
+            refused(heap, ar, sr, "GET /items?limit=-1 HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/query/limit\",\"code\":\"minimum\",\"detail\":\"is below the minimum\"}");
+            refused(heap, ar, sr, "GET /items?limit=%2D1 HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/query/limit\",\"code\":\"minimum\",\"detail\":\"is below the minimum\"}");
+            refused(heap, ar, sr, "GET /items?limit=101 HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/query/limit\",\"code\":\"maximum\",\"detail\":\"is above the maximum\"}");
+            refused(heap, ar, sr, "GET /items?offset=-1 HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/query/offset\",\"code\":\"minimum\",\"detail\":\"is below the minimum\"}");
+            refused(heap, ar, sr, "GET /items?offset=1001 HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/query/offset\",\"code\":\"maximum\",\"detail\":\"is above the maximum\"}");
+            refused(heap, ar, sr, "GET /items?limit=x HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/query/limit\",\"code\":\"type\",\"detail\":\"has the wrong type\"}");
+            refused(heap, ar, sr, "GET /items?limit= HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/query/limit\",\"code\":\"type\",\"detail\":\"has the wrong type\"}");
+            refused(heap, ar, sr, "GET /items?limit=5.0 HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/query/limit\",\"code\":\"type\",\"detail\":\"has the wrong type\"}");
+            refused(heap, ar, sr, "GET /items?limit=+5 HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/query/limit\",\"code\":\"type\",\"detail\":\"has the wrong type\"}");
+            refused(heap, ar, sr, "GET /items?limit=0x5 HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/query/limit\",\"code\":\"type\",\"detail\":\"has the wrong type\"}");
+            refused(heap, ar, sr, "GET /items?limit=99999999999999999999 HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/query/limit\",\"code\":\"range\",\"detail\":\"is outside the range of an integer\"}");
+            refused(heap, ar, sr, "GET /items?role=root HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/query/role\",\"code\":\"choice\",\"detail\":\"is not one of the allowed values\"}");
+            refused(heap, ar, sr, "GET /items?role=Admin HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/query/role\",\"code\":\"choice\",\"detail\":\"is not one of the allowed values\"}");
+            refused(heap, ar, sr, "GET /items?role= HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/query/role\",\"code\":\"choice\",\"detail\":\"is not one of the allowed values\"}");
+            refused(heap, ar, sr, "GET /items?q= HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/query/q\",\"code\":\"min_length\",\"detail\":\"is too short\"}");
+            refused(heap, ar, sr, "GET /items?q=abcdefghi HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/query/q\",\"code\":\"max_length\",\"detail\":\"is too long\"}");
+            refused(heap, ar, sr, "GET /items?q=%zz HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/query/q\",\"code\":\"type\",\"detail\":\"has the wrong type\"}");
+            refused(heap, ar, sr, "GET /items?q=%ff HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/query/q\",\"code\":\"type\",\"detail\":\"has the wrong type\"}");
+            refused(heap, ar, sr, "GET /items?q=a%00b HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/query/q\",\"code\":\"nul\",\"detail\":\"must not contain U+0000\"}");
+            is(heap, ar, sr, "GET /items?role=a%00b HTTP/1.0\r\n\r\n", 0, "422|{\"type\":\"about:blank\",\"title\":\"Unprocessable Content\",\"status\":422,\"count\":1,\"errors\":[{\"pointer\":\"/query/role\",\"code\":\"choice\",\"detail\":\"is not one of the allowed values\"}]}");
+            refused(heap, ar, sr, "GET /items?verbose=yes HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/query/verbose\",\"code\":\"type\",\"detail\":\"has the wrong type\"}");
+            refused(heap, ar, sr, "GET /items?verbose=True HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/query/verbose\",\"code\":\"type\",\"detail\":\"has the wrong type\"}");
+            refused(heap, ar, sr, "GET /items?verbose= HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/query/verbose\",\"code\":\"type\",\"detail\":\"has the wrong type\"}");
+            refused(heap, ar, sr, "GET /items?limit=1&limit=2 HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/query/limit\",\"code\":\"duplicate\",\"detail\":\"is given more than once\"}");
+            refused(heap, ar, sr, "GET /items?limit=1&offset=2&limit=3 HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/query/limit\",\"code\":\"duplicate\",\"detail\":\"is given more than once\"}");
+            refused(heap, ar, sr, "GET /items?nope=1 HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/query/nope\",\"code\":\"unknown\",\"detail\":\"is not a known field\"}");
+            refused(heap, ar, sr, "GET /items?nope HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/query/nope\",\"code\":\"unknown\",\"detail\":\"is not a known field\"}");
+            refused(heap, ar, sr, "GET /items?nope= HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/query/nope\",\"code\":\"unknown\",\"detail\":\"is not a known field\"}");
+            refused(heap, ar, sr, "GET /items?& HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/query/\",\"code\":\"unknown\",\"detail\":\"is not a known field\"}");
+            refused(heap, ar, sr, "GET /items?limit=1&&offset=2 HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/query/\",\"code\":\"unknown\",\"detail\":\"is not a known field\"}");
+            refused(heap, ar, sr, "GET /items?a~b/c=1 HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/query/a~0b~1c\",\"code\":\"unknown\",\"detail\":\"is not a known field\"}");
+            refused(heap, ar, sr, "GET /items?%6Cimit=5 HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/query/%6Cimit\",\"code\":\"unknown\",\"detail\":\"is not a known field\"}");
+            refused(heap, ar, sr, "GET /items?limit=101&offset=-1&nope=1 HTTP/1.0\r\n\r\n", 3, "{\"pointer\":\"/query/limit\",\"code\":\"maximum\",\"detail\":\"is above the maximum\"},{\"pointer\":\"/query/offset\",\"code\":\"minimum\",\"detail\":\"is below the minimum\"},{\"pointer\":\"/query/nope\",\"code\":\"unknown\",\"detail\":\"is not a known field\"}");
+            refused(heap, ar, sr, "GET /items?nope=1&limit=0&other=2 HTTP/1.0\r\n\r\n", 3, "{\"pointer\":\"/query/limit\",\"code\":\"minimum\",\"detail\":\"is below the minimum\"},{\"pointer\":\"/query/nope\",\"code\":\"unknown\",\"detail\":\"is not a known field\"},{\"pointer\":\"/query/other\",\"code\":\"unknown\",\"detail\":\"is not a known field\"}");
+        }
+    }
+    web.drop(heap, api);
+    schema.drop(heap, s);
+    return 0;
+}
+
+// ... on a path parameter and on a header, in the order the operation declared them (the path before the header).
+fn test_dispatch_refuses_a_path_parameter_and_a_header_by_rule[&h](heap: &!h Heap) -> [heap] int {
+    let (api, s) = dispatch_api(heap);
+    borrow api as &ar in {
+        borrow s as &sr in {
+            refused(heap, ar, sr, "GET /items/0 HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/path/id\",\"code\":\"minimum\",\"detail\":\"is below the minimum\"}");
+            refused(heap, ar, sr, "GET /items/100 HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/path/id\",\"code\":\"maximum\",\"detail\":\"is above the maximum\"}");
+            refused(heap, ar, sr, "GET /items/-1 HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/path/id\",\"code\":\"minimum\",\"detail\":\"is below the minimum\"}");
+            refused(heap, ar, sr, "GET /items/abc HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/path/id\",\"code\":\"type\",\"detail\":\"has the wrong type\"}");
+            refused(heap, ar, sr, "GET /items/1.0 HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/path/id\",\"code\":\"type\",\"detail\":\"has the wrong type\"}");
+            refused(heap, ar, sr, "GET /items/99999999999999999999 HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/path/id\",\"code\":\"range\",\"detail\":\"is outside the range of an integer\"}");
+            refused(heap, ar, sr, "GET /items/5 HTTP/1.0\r\nIdempotency-Key: abcdefghi\r\n\r\n", 1, "{\"pointer\":\"/header/Idempotency-Key\",\"code\":\"max_length\",\"detail\":\"is too long\"}");
+            refused(heap, ar, sr, "GET /items/5 HTTP/1.0\r\nIdempotency-Key:\r\n\r\n", 1, "{\"pointer\":\"/header/Idempotency-Key\",\"code\":\"min_length\",\"detail\":\"is too short\"}");
+            refused(heap, ar, sr, "GET /items/0 HTTP/1.0\r\nIdempotency-Key: abcdefghi\r\n\r\n", 2, "{\"pointer\":\"/path/id\",\"code\":\"minimum\",\"detail\":\"is below the minimum\"},{\"pointer\":\"/header/Idempotency-Key\",\"code\":\"max_length\",\"detail\":\"is too long\"}");
+            refused(heap, ar, sr, "GET /pairs/3/0 HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/path/b\",\"code\":\"minimum\",\"detail\":\"is below the minimum\"}");
+            refused(heap, ar, sr, "GET /pairs/0/100 HTTP/1.0\r\n\r\n", 2, "{\"pointer\":\"/path/a\",\"code\":\"minimum\",\"detail\":\"is below the minimum\"},{\"pointer\":\"/path/b\",\"code\":\"maximum\",\"detail\":\"is above the maximum\"}");
+            refused(heap, ar, sr, "GET /items/a+b HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/path/id\",\"code\":\"type\",\"detail\":\"has the wrong type\"}");
+            refused(heap, ar, sr, "GET /req HTTP/1.0\r\n\r\n", 2, "{\"pointer\":\"/query/need\",\"code\":\"required\",\"detail\":\"is required\"},{\"pointer\":\"/header/X-Trace\",\"code\":\"required\",\"detail\":\"is required\"}");
+            refused(heap, ar, sr, "GET /req?need=3 HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/header/X-Trace\",\"code\":\"required\",\"detail\":\"is required\"}");
+            refused(heap, ar, sr, "GET /req HTTP/1.0\r\nX-Trace: t\r\n\r\n", 1, "{\"pointer\":\"/query/need\",\"code\":\"required\",\"detail\":\"is required\"}");
+            refused(heap, ar, sr, "GET /req?need=10 HTTP/1.0\r\nX-Trace: t\r\n\r\n", 1, "{\"pointer\":\"/query/need\",\"code\":\"maximum\",\"detail\":\"is above the maximum\"}");
+            refused(heap, ar, sr, "GET /req?need=3&need=4 HTTP/1.0\r\nX-Trace: t\r\n\r\n", 1, "{\"pointer\":\"/query/need\",\"code\":\"duplicate\",\"detail\":\"is given more than once\"}");
+            refused(heap, ar, sr, "GET /req?need=3 HTTP/1.0\r\nX-Trace: toolongvalue\r\n\r\n", 1, "{\"pointer\":\"/header/X-Trace\",\"code\":\"max_length\",\"detail\":\"is too long\"}");
+        }
+    }
+    web.drop(heap, api);
+    schema.drop(heap, s);
+    return 0;
+}
+
+// A path or query value is judged decoded (`%35` is `5`, `+` is a space in a query, not in a path); a header is not.
+fn test_dispatch_judges_a_path_and_a_query_value_decoded[&h](heap: &!h Heap) -> [heap] int {
+    let (api, s) = dispatch_api(heap);
+    borrow api as &ar in {
+        borrow s as &sr in {
+            is(heap, ar, sr, "GET /items/%35 HTTP/1.0\r\n\r\n", 1, "3|5,1");
+            is(heap, ar, sr, "GET /items?limit=%35&role=adm%69n HTTP/1.0\r\n\r\n", 3, "2|5,1|0,0|26,33");
+            is(heap, ar, sr, "GET /items?q=a+b HTTP/1.0\r\n\r\n", 4, "2|0,0|0,0|-1,-1|13,16");
+            is(heap, ar, sr, "GET /items?role=two+words HTTP/1.0\r\n\r\n", 3, "2|0,0|0,0|16,25");
+            is(heap, ar, sr, "GET /items?role=two%20words HTTP/1.0\r\n\r\n", 3, "2|0,0|0,0|16,27");
+            is(heap, ar, sr, "GET /items?q=a%2Fb HTTP/1.0\r\n\r\n", 4, "2|0,0|0,0|-1,-1|13,18");
+        }
+    }
+    web.drop(heap, api);
+    schema.drop(heap, s);
+    return 0;
+}
+
+// The whole answer, head included, of a request that dispatch answered itself (an empty buffer if it ran).
+fn whole[&h, &a, &s, &r](heap: &!h Heap, api: &a web.Api, sc: &s schema.Schema, raw: &r [byte]) -> [heap] buffer.Buffer {
+    let table = box_slice(heap, 80, 0);
+    let params = box_slice(heap, 2 * web.most_params(api) + 2, 0);
+    let args = box_slice(heap, web.most_args(api), 0);
+    let scratch = box_slice(heap, 64, byte_of(0));
+    var out = buffer.empty(heap, 64);
+    borrow mut table as &!tw in {
+        test.assert(http.parse(raw, contents(tw)) >= 0);
+        borrow mut params as &!pw in {
+            borrow mut args as &!aw in {
+                borrow mut scratch as &!cw in {
+                    let (answer, id) = web.dispatch(heap, api, sc, raw, contents(tw), contents(pw), contents(aw), contents(cw), out, false);
+                    out = answer;
+                }
+            }
+        }
+    }
+    unbox_slice(heap, scratch);
+    unbox_slice(heap, args);
+    unbox_slice(heap, params);
+    unbox_slice(heap, table);
+    return out;
+}
+
+// No route is a 404 and a path under other methods a 405 with `Allow`, written by dispatch, so the handler's last `else` is gone.
+fn test_dispatch_answers_no_route_and_a_wrong_method_itself[&h](heap: &!h Heap) -> [heap] int {
+    let (api, s) = dispatch_api(heap);
+    borrow api as &ar in {
+        borrow s as &sr in {
+            is(heap, ar, sr, "GET /nope HTTP/1.0\r\n\r\n", 0, "404|{\"type\":\"about:blank\",\"title\":\"Not Found\",\"status\":404,\"detail\":\"no such route\"}");
+            is(heap, ar, sr, "GET / HTTP/1.0\r\n\r\n", 0, "404|{\"type\":\"about:blank\",\"title\":\"Not Found\",\"status\":404,\"detail\":\"no such route\"}");
+            is(heap, ar, sr, "GET /items/5/more HTTP/1.0\r\n\r\n", 0, "404|{\"type\":\"about:blank\",\"title\":\"Not Found\",\"status\":404,\"detail\":\"no such route\"}");
+            is(heap, ar, sr, "POST /items HTTP/1.0\r\n\r\n", 0, "405|{\"error\":\"method not allowed\"}");
+            let answer = whole(heap, ar, sr, "DELETE /items/5 HTTP/1.0\r\n\r\n");
+            borrow answer as &ab in {
+                let text = buffer.bytes(ab);
+                test.assert_eq(index_of(text, "HTTP/1.1 405 Method Not Allowed\r\n"), 0);
+                test.assert(index_of(text, "\r\nAllow: GET\r\n") > 0);
+                test.assert(index_of(text, "\r\nContent-Type: application/json\r\n") > 0);
+                test.assert(index_of(text, "\r\nConnection: close\r\n") > 0);
+            }
+            buffer.drop(heap, answer);
+            // A refusal of parameters carries the problem content type, and `keep` says whether the connection stays.
+            let refusal = whole(heap, ar, sr, "GET /items?limit=0 HTTP/1.0\r\n\r\n");
+            borrow refusal as &rb in {
+                test.assert_eq(index_of(buffer.bytes(rb), "HTTP/1.1 422 Unprocessable Content\r\n"), 0);
+                test.assert(index_of(buffer.bytes(rb), "\r\nContent-Type: application/problem+json\r\n") > 0);
+                test.assert(index_of(buffer.bytes(rb), "\r\nConnection: close\r\n") > 0);
+            }
+            buffer.drop(heap, refusal);
+        }
+    }
+    web.drop(heap, api);
+    schema.drop(heap, s);
+    return 0;
+}
+
+// A value too long for `scratch` to decode is `max_length`, whatever its kind; a bad escape in a path is `type`.
+fn test_dispatch_decodes_into_the_room_it_was_given[&h](heap: &!h Heap) -> [heap] int {
+    let (api, s) = dispatch_api(heap);
+    borrow api as &ar in {
+        borrow s as &sr in {
+            let fits = outcome(heap, ar, sr, "GET /items?q=abcd HTTP/1.0\r\n\r\n", 4, 0);
+            let overflows = outcome(heap, ar, sr, "GET /items?q=abcde HTTP/1.0\r\n\r\n", 4, 0);
+            let wide = problem(heap, 1, "{\"pointer\":\"/query/q\",\"code\":\"max_length\",\"detail\":\"is too long\"}");
+            borrow fits as &fb in {
+                test.assert(bytes.equal(buffer.bytes(fb), "2"));
+            }
+            borrow overflows as &ob in {
+                borrow wide as &wb in {
+                    test.assert(bytes.equal(buffer.bytes(ob), buffer.bytes(wb)));
+                }
+            }
+            buffer.drop(heap, fits);
+            buffer.drop(heap, overflows);
+            buffer.drop(heap, wide);
+            // An integer too long for the room is refused the same way, not read short.
+            let long_id = outcome(heap, ar, sr, "GET /items/00000000000000000005 HTTP/1.0\r\n\r\n", 4, 0);
+            let long_want = problem(heap, 1, "{\"pointer\":\"/path/id\",\"code\":\"max_length\",\"detail\":\"is too long\"}");
+            borrow long_id as &lb in {
+                borrow long_want as &lw in {
+                    test.assert(bytes.equal(buffer.bytes(lb), buffer.bytes(lw)));
+                }
+            }
+            buffer.drop(heap, long_id);
+            buffer.drop(heap, long_want);
+            refused(heap, ar, sr, "GET /items/%zz HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/path/id\",\"code\":\"type\",\"detail\":\"has the wrong type\"}");
+        }
+    }
+    web.drop(heap, api);
+    schema.drop(heap, s);
+    return 0;
+}
+
+fn repeated[&h, &t](heap: &!h Heap, b: buffer.Buffer, text: &t [byte], n: int) -> [heap] buffer.Buffer {
+    var out = b;
+    var i = 0;
+    while i < n {
+        out = buffer.append(heap, out, text);
+        i = i + 1;
+    }
+    return out;
+}
+
+fn count_of[&a, &b](hay: &a [byte], needle: &b [byte]) -> [] int {
+    var n = 0;
+    var i = 0;
+    while i + len(needle) <= len(hay) {
+        if bytes.equal(hay[i..i + len(needle)], needle) {
+            n = n + 1;
+            i = i + len(needle);
+        } else {
+            i = i + 1;
+        }
+    }
+    return n;
+}
+
+// Hostile queries: counted up to a bound and listed up to another, linear in the request, and nothing reaches a trap.
+fn test_dispatch_bounds_what_a_hostile_request_makes_it_do[&h](heap: &!h Heap) -> [heap] int {
+    let (api, s) = dispatch_api(heap);
+    borrow api as &ar in {
+        borrow s as &sr in {
+            // 2,000 keys the operation does not know: the count stops at 64 and 16 are listed.
+            var many = buffer.append(heap, buffer.empty(heap, 64), "GET /items?");
+            many = repeated(heap, many, "a=1&", 2000);
+            many = buffer.append(heap, many, " HTTP/1.0\r\n\r\n");
+            borrow many as &mb in {
+                let got = outcome(heap, ar, sr, buffer.bytes(mb), 64, 0);
+                borrow got as &gb in {
+                    test.assert_eq(index_of(buffer.bytes(gb), "422|{\"type\":\"about:blank\",\"title\":\"Unprocessable Content\",\"status\":422,\"count\":64,\"errors\":[{\"pointer\":\"/query/a\""), 0);
+                    test.assert_eq(count_of(buffer.bytes(gb), "\"pointer\""), 16);
+                }
+                buffer.drop(heap, got);
+            }
+            buffer.drop(heap, many);
+            // 2,000 copies of a key it knows: one `duplicate`, not 2,000.
+            var twice = buffer.append(heap, buffer.empty(heap, 64), "GET /items?");
+            twice = repeated(heap, twice, "limit=1&", 2000);
+            twice = buffer.append(heap, twice, " HTTP/1.0\r\n\r\n");
+            borrow twice as &tb in {
+                refused(heap, ar, sr, buffer.bytes(tb), 1, "{\"pointer\":\"/query/limit\",\"code\":\"duplicate\",\"detail\":\"is given more than once\"}");
+            }
+            buffer.drop(heap, twice);
+            // One 20,000-byte key it does not know: one error, the answer framed to its length (`describe_answer` checks that).
+            var longkey = buffer.append(heap, buffer.empty(heap, 64), "GET /items?");
+            longkey = repeated(heap, longkey, "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk", 500);
+            longkey = buffer.append(heap, longkey, "=1 HTTP/1.0\r\n\r\n");
+            borrow longkey as &kb in {
+                let got = outcome(heap, ar, sr, buffer.bytes(kb), 64, 0);
+                borrow got as &gb in {
+                    test.assert(index_of(buffer.bytes(gb), "\"count\":1,\"errors\":[{\"pointer\":\"/query/kkkk") > 0);
+                    test.assert(len(buffer.bytes(gb)) > 20000);
+                }
+                buffer.drop(heap, got);
+            }
+            buffer.drop(heap, longkey);
+            // A value that is not text. `http.parse` refuses such a byte in the request target, so a header is where one can arrive,
+            // and it is `type`, and the answer is still a document (a percent-encoded one, `%ff`, is in the query tests).
+            var raw = buffer.append(heap, buffer.empty(heap, 64), "GET /items/5 HTTP/1.0\r\nIdempotency-Key: a");
+            raw = buffer.push(heap, raw, byte_of(255));
+            raw = buffer.append(heap, raw, "\r\n\r\n");
+            borrow raw as &rb in {
+                refused(heap, ar, sr, buffer.bytes(rb), 1, "{\"pointer\":\"/header/Idempotency-Key\",\"code\":\"type\",\"detail\":\"has the wrong type\"}");
+            }
+            buffer.drop(heap, raw);
+        }
+    }
+    web.drop(heap, api);
+    schema.drop(heap, s);
     return 0;
 }

@@ -1,9 +1,9 @@
 # cancho-web: a FastAPI-shaped layer for cancho
 
-> **Status: design, one real example built (§7), and its declaration half extracted (§8)**:
-> `src/web.cho` writes the router and the OpenAPI document from one declaration. Dispatch and
-> middleware are not built; the first section says what this does *not* try to be. §9 designs the
-> next slice (parameters validated by construction).
+> **Status: design, one real example built (§7), its declaration half extracted (§8), and parameters validated by
+> construction built (§9, 2026-10-08)**: `src/web.cho` writes the router and the OpenAPI document from one declaration, and
+> `web.dispatch` judges a request's declared parameters before the handler runs. Middleware is not built; the first section
+> says what this does *not* try to be.
 
 ## 1. What it is, and is not
 
@@ -212,23 +212,23 @@ the routing the declaration also made. Throughput is unchanged: GET one 123,200-
 
 **What it does not do, and why.**
 
-* **It does not dispatch.** The application keeps its loop and its `if` on the id, for the reason
+* **It does not own the loop.** (*Corrected 2026-10-08: §9 built `web.dispatch`, which the application calls in its loop; it routes and judges parameters, and the handler is still an `if` on the id.*) The application keeps its loop and its `if` on the id, for the reason
   in §2: a callback cannot be handed a view of the loop's buffers. A named constant per id, checked
   against what `operation` returned at start-up, would remove the one remaining way for the `if`
   and the declaration to disagree; it is not built.
 * **It does not validate parameters for the handler.** `route.param_nat` and `http.query_value` are
   still the handler's, and a path or query parameter that fails its declared schema is still a check
   the handler makes -- although the declaration now says what that schema is. Making a bad
-  parameter a `422` by construction is the next slice, and needs a place to put the answer; the
-  declaration has the information, the dispatch does not exist yet. §9 designs it.
+  parameter a `422` by construction was the next slice and is built (§9): `web.dispatch` writes the answer.
 * **Responses are documented, not enforced.** `respond` says what a handler may answer; nothing
   checks that it did. The contract test does, per request, from outside.
 
-## 9. Parameters by construction (design, not built)
+## 9. Parameters by construction
 
-> **Status: design.** Nothing here exists yet. Every number below is a figure from the
-> current code or `docs/benchmarks.md`; the costs of the new code are *to be measured* (§9.7),
-> not promised.
+> **Status: built (2026-10-08), with the corrections of §9.10.** `web.dispatch`, `web.slot`, `web.most_args` and the
+> accessors are in `src/web.cho`, `examples/users` uses them, and §9.7 says what was shown. This section was written as a
+> design first and is kept as it was written except where a sentence turned out false: those are corrected in place and
+> listed in §9.10. `examples/users_pg` and `examples/users_threads` still use `web.find` and their own checks.
 
 ### 9.1 The problem, in the code as it stands
 
@@ -249,17 +249,17 @@ types*) and the question is only how the *values* reach the handler.
 `handle` calls `web.find` today. It is not a callback and owns nothing:
 
 ```
-let (answer, id) = web.dispatch(heap, api, sc, request, table, params, args, out, keep);
-if id >= 0 {
+let (answer, id) = web.dispatch(heap, api, sc, request, table, params, args, scratch, out, keep);
+if id != web.answered() {
     // the route matched and every declared parameter is valid; read them from `args`
-    let limit  = web.int(args, limit_slot);          // present or defaulted: always a valid int here
-    let offset = web.int(args, offset_slot);
+    let limit  = web.int_arg(args, limit_slot);      // a valid int if it was present: ask `web.present`
+    let offset = web.int_arg(args, offset_slot);
 } // else: `answer` already holds the 404, 405 or 422; send it
 ```
 
-* **`id >= 0`**: the handler runs. `out` is untouched. For each declared parameter of that
+* **a route id**: the handler runs. `out` is untouched. For each declared parameter of that
   operation, `args` holds two ints (§9.3), in declaration order.
-* **`id < 0`**: dispatch has already written the whole answer to `out` -- the 404 for no such
+* **`web.answered()` (-1)**: dispatch has already written the whole answer to `out` -- the 404 for no such
   path, the 405 with `Allow` (the code `handle` has today, moved), or the 422 for a parameter.
   The caller sends it. The handler does not run, so it cannot forget the check.
 * **Slots are numbers learned at start-up**, the way operation ids are: `web.query_param`
@@ -292,15 +292,11 @@ Two ints per parameter, `(a, b)`, by the kind of its schema node:
 
 Text slots are offsets into **the request head** (`request`), one base for path, query and
 header alike, so `request[a..b]` is the value with no copy and the borrow rules already hold
-(a handler's request is a borrowed view of the loop's buffers). Percent-decoding stays the
-handler's, through `route.param_decoded` and `http.percent_decode`, as today; whether dispatch
-should offer it is §9.9.
+(a handler's request is a borrowed view of the loop's buffers). The offsets are of the value *as sent*; a value is
+*judged* decoded (§9.10), and a handler that wants the decoded text decodes it, through `route.param_decoded`.
 
 A parameter that is required and absent never reaches a slot (422). An optional one with no
-default has `b = 0`, and the handler asks `web.present`. A **default** is a declaration
-(`web.default_int(heap, api, op, "limit", 20)`), written to the OpenAPI schema as `default` and
-applied by dispatch -- so `default_limit()` stops being a second copy of a number the document
-states.
+default has `b = 0`, and the handler asks `web.present`. *Corrected: a default as a declaration (`web.default_int`), written to the OpenAPI schema as `default` and applied by dispatch, **is not built** (§9.10); the example keeps `default_limit()`, and it is still a second copy of a number the document does not state.*
 
 ### 9.4 What dispatch checks, and what it answers
 
@@ -310,7 +306,7 @@ bodies:
 | code | when |
 |---|---|
 | `required` | a required query or header parameter is absent |
-| `unknown` | a query key the operation did not declare (the rule `query_keys_known` encodes today) |
+| `unknown` | a query key the operation did not declare (the rule `query_keys_known` encoded), **for an operation that declares at least one query parameter** (§9.10) |
 | `duplicate` | a declared query key given twice. `http.query_value` takes the first and ignores the rest; for an API that already refuses unknown keys, silently choosing one is the same defect |
 | `type` | an integer parameter is not decimal digits (an optional `-`), or has more than 17 digits |
 | `minimum`, `maximum` | outside the node's range |
@@ -354,25 +350,41 @@ checks in `list` and the `id < 1` check in `one` are deleted -- the handler rece
 and `web` gains the one place that has it. `lexsys-hooks` (26 routes) is the second consumer
 and the check that the slot API is not shaped to one example.
 
-### 9.7 What must be shown before this is called done
+### 9.7 What had to be shown before this was called done, and what was
 
-1. **The contract does not move.** `examples/users/openapi.json` is byte-identical (`cmp`), the
-   same fixed point §8 used.
-2. **The answers do not move, except one.** The existing 27 end-to-end tests, Schemathesis
-   included, pass; the single change is the 422 `detail` for a bad parameter, which becomes the
-   `errors` list above. That test is rewritten, and the change is listed in the commit.
-3. **A rule tag per refusal.** `tests/web_test.cho` has a case for each code in §9.4, for each
-   place (path, query, header), and for several errors at once; plus the cases that must *not*
-   refuse (a declared key, a default applied, an optional absent, a 17-digit value at the range).
-4. **No input reaches a panic.** A table of hostile parameter text (empty, 18 digits, a lone
-   `-`, `%`, an embedded NUL, a very long query, 10,000 repeated keys) against every operation of
-   both examples, expecting a `422` or success, never a trap. The long-query case checks that
-   dispatch is linear in the query length.
-5. **The cost, measured, not argued.** The benchmark's GET one (128,972 requests a second) and
-   page of 20 (70,768) must stay within the run-to-run spread (about 5%) of those figures, on the
-   same VM, alternated, three rounds, as §8 did; the rejected-body case (94,659) must not move.
-   Dispatch parses the integer once where the handler did, so the expectation is neutral, and if
-   it is not, the table says by how much and the claim here is corrected in place.
+1. **The contract does not move.** `examples/users/openapi.json` byte-identical (`cmp`), the same fixed point §8 used.
+   *Shown:* the end-to-end test that compares the served document with the file passes, unchanged.
+2. **The answers do not move, except one.** The existing 27 end-to-end tests, Schemathesis included, pass; the single change
+   is the 422 for a bad parameter, which becomes the `errors` list above. *Shown, with two more changes the design did not
+   foresee* (§9.10: a value is judged decoded, so `limit=%35` is now 5 and was a 422; and the default `detail` sentences are now the codes'). The one test that
+   needed a change was not changed: it asserts a status, not a sentence.
+3. **A rule tag per refusal.** *Shown:* `tests/web_test.cho` has seven dispatch tests (14 in the file) with a case for every code in
+   §9.4, for each place (path, query, header), for several errors at once, for two path parameters, and for the cases that
+   must *not* refuse (a declared key, an optional absent, a value at the end of its range, a header that contains `%zz`).
+4. **No input reaches a panic.** *Shown for what dispatch can be handed:* 2,000 unknown keys (counted to 64, 16 listed), 2,000
+   copies of a known key (one `duplicate`), one 20,000-byte key, a header that is not text, `%zz`, `%ff`, an integer of 20 digits,
+   a `%00` (refused as `nul` by a string that forbids it, and as a `choice` by one that does not allow it), and a scratch buffer too small.
+   **Not shown as written:** the design named 10,000 repeated keys and an embedded raw NUL. A head is limited to 65,536 bytes
+   (`http.max_head`), so 2,000 is what fits in a useful query, and `http.parse` refuses a raw 0xFF in the request target (tested), so a
+   byte that is not text arrives in a header or percent-encoded. Linear in the query: two passes over it per declared parameter,
+   and the unknown-key pass stops at 64 errors.
+5. **The cost, measured, not argued.** `benches/ab.sh` alternates the old build (`main`) and the new one, on the workloads of
+   `benches/run.sh` plus `GET /users?limit=0`, six rounds, server on core 0 and `kload` on cores 2 and 3. **This VM is slower than the one
+   `docs/benchmarks.md` was measured on** (a read here is about 86,000, not 129,000), so only the ratios are comparable.
+
+   | requests a second, median of 6 | before | after | after / before |
+   |---|---:|---:|---:|
+   | GET one user | 86,140 | 84,816 | 0.985 |
+   | GET a page of 20 | 76,294 | 74,451 | 0.976 |
+   | POST, invalid body (422) | 63,011 | 62,739 | 0.996 |
+   | POST, create | 55,507 | 54,559 | 0.983 |
+   | GET `/users?limit=0` (a parameter refused) | 81,516 | 73,011 | **0.896** |
+
+   Within the 5% the figures of this VM move by, **except the refusal of a parameter, which is 10% slower**: it judges the request
+   twice (a pass that answers 0 or not, then a pass that writes the entries) and builds a JSON document per error where the
+   hand-written code wrote one fixed sentence. A rejected *body*, the case this section promised would not move, did not.
+   **The first implementation was slower** (0.93-0.94 on a read, repeated in two runs, outside the noise): it scanned every
+   record of the declaration for each request, so its cost grew with the size of the API and not with the operation. §9.10.
 
 ### 9.8 What this deliberately is not
 
@@ -385,36 +397,51 @@ and the check that the slot API is not shaped to one example.
   existing `*_param` call are unchanged; a service that keeps calling `web.find` keeps working.
   Dispatch is additive, and `web.find` remains the thing it calls.
 
-### 9.9 Open questions
+### 9.9 Open questions, as they stand
 
-1. **Offsets or decoded text.** Percent-decoding needs a destination buffer, which dispatch does
-   not have without an allocation; handing back raw offsets keeps it free. A `decoded` variant
-   would need a per-request scratch buffer in `args`' owner. Defer until a service needs it.
-2. **`pointer` for a parameter.** `/query/limit` (no contract change) or additive `in` and `name`
-   members (contract changes, `Problem` gains two optional fields). Chosen: the first, for the
-   fixed point; to be revisited if a client is found that dislikes it.
-3. **Leading zeros and `-0`.** Accepted today; a stricter rule is a contract change and belongs
-   in a slice of its own, with Schemathesis's view of it.
-4. **Generated constants for ids and slots** (§9.2, first row). If hand-written `let limit_slot =
-   web.slot(...)` lines turn out to be what people mind, a `pgen`-style tool is the answer; not
-   before there is a service that does.
-5. **Headers.** The slot table covers them identically (`b = 0` when absent), but header names
-   are case-insensitive and `http.header` is the existing lookup; `lexsys-hooks`'s
-   `Idempotency-Key` is the case to design against.
+1. **Offsets or decoded text.** *Answered:* the slot keeps offsets of the raw value, a value is judged decoded into a `scratch`
+   the caller owns (§9.10), and a handler that wants the decoded text decodes it.
+2. **`pointer` for a parameter.** *Answered as proposed:* `/query/limit`, `/path/id`, `/header/Idempotency-Key`; `Problem`
+   is unchanged. To be revisited if a client is found that dislikes it.
+3. **Leading zeros and `-0`.** Accepted, as before (`cancho-schema` §14 says so); a stricter rule is a contract change and belongs in a slice of its own.
+4. **Generated constants for ids and slots** (§9.2, first row). Still open: `examples/users` keeps three `web.slot` lookups at start-up, which is not a burden at this size.
+5. **Defaults as a declaration.** Still open, and now the next step for parameters: the document needs `"default"` inside the parameter's
+   schema, which means splicing into the fragment `cancho-schema` writes.
+6. **Headers.** *Answered:* looked up by a lowercase copy of the declared name kept in the text pool, so the document keeps the
+   declared spelling and the lookup ignores case. `cancho-hooks`'s `Idempotency-Key` is the case to design against, and is not yet a consumer of `dispatch`.
 
-## 10. What `cancho` has now that `web` has not been tried with
+### 9.10 What building it found, and what it changed in the design above
 
-*Written 2026-10-08, after the README and this document were found to say that TLS and more than one core did not exist.* Read from `cancho`'s own documents; nothing here was run.
-
-* **TLS.** `packages/tls` has a TLS 1.3 server (`docs/tls-server.md`; *not independently reviewed*), and `http.server` has a byte-fed mode
-  (`open_bytes`, `attach`, `input`, `output`: `docs/http-server.md` section 11) in which the application moves the bytes, which is what a
-  terminator in front of it does. `examples/https_hello` is the two in one program. A `web` service keeps its loop, so this layer is not in
-  the way; what is missing is a service, a test and a measurement. The authority report would also change: TLS reads a certificate and
-  random bytes, and the users service's report names no files today. **Until that is built and measured, the claim stays "behind a
-  TLS-terminating front".**
-* **Threads.** `spawn` and `join` are real `pthread`s (`docs/threads.md`); `docs/parallelism.md` section 9 gives a second thread its own
-  heap and clock. `examples/users_threads` is the unchanged `users` loop in two of them, and it measured no worse than two processes
-  (`docs/benchmarks.md`). It shares nothing, so it is not a deployable service, and the section of `parallelism.md` on a shared store is
-  where that would begin.
-* **Streaming a response** is `stream` in `http.server`. `web` has no way to declare it (`respond` declares a body of one schema), and
-  the OpenAPI side of it (a `text/event-stream`, a download) is not designed.
+* **`cancho-schema` needed more than one function.** `check_text`, `int_of_text` and `bool_of_text` (its design §14), and then
+  `is_int`, `is_bool` and `is_string`, because a slot keeps the value in the shape its node says and `web` had no way to ask. And the
+  first merge forgot to republish the store consumers build from, so nothing could use them: it now has a CI step that fails when
+  the committed store is not what the source publishes.
+* **One error per parameter, the first, and `range` instead of a 17-digit cap** (decided in `cancho-schema` §14). The cap came
+  from the hand-written `number_of`; a cap the node does not state is the defect §7 describes.
+* **A value is judged decoded.** Percent-decoding needs a destination, so `dispatch` takes a `scratch` the caller allocates once
+  (the example gives it 256 bytes); a path or query value that is longer is `max_length`, whatever its kind, and a bad escape is
+  `type`. In a query `+` is a space; in a path it is not; a header is judged as sent (`%zz` is three characters of one). The change
+  that follows is visible: `/users?limit=%35` was a 422 and is a 200, and `/users/%35` is user 5.
+* **An operation that declares no query parameter ignores its query string, as before.** The design said "a query key the operation
+  did not declare" for every operation. `GET /health?x=1` would then be a 422 the document does not declare for `/health`, and the
+  contract test (every response must be declared) would be right to fail it. An operation that declares any query parameter is closed.
+  An empty pair (`a=1&&b=2`, or `&`) is a key with no name and is unknown, as `query_keys_known` had it; a trailing `&` is not.
+* **No defaults** (§9.3, §9.9).
+* **404 and 405 moved into `dispatch`**, byte for byte as `handle` wrote them: the 404 as `problem+json`, the 405 as `{"error":"method not
+  allowed"}` with `Allow`, which is not `problem+json` and is not in the document; it was that before and was not changed here.
+* **Two passes, not one.** `judge` answers whether anything is wrong and allocates nothing; only a request that fails runs
+  `explain`, which writes the entries. The first version ran one function with a buffer in both cases and allocated an empty buffer per
+  request; that was part of the first measurement's 6%.
+* **The declaration has an index now.** Each operation's parameters are a chain through their records and `Api` keeps, for each operation, where its
+  record and its first parameter are. Before it, `dispatch` scanned the whole declaration per request. This is the claim of §8 ("declaring is
+  `O(1)`") made true for reading as well: dispatch costs the parameters of one operation.
+* **The unit tests were first written in HTTP/1.1 and trapped:** `http.parse` requires a `Host` header there. They are HTTP/1.0.
+* **Mutations.** Twenty changes to `dispatch` and the code under it (the unknown-key pass off, the duplicate check off, a required
+  parameter ignored, both bounds off, the header looked up by its declared case, the path offset without its start, `+` not a space,
+  the two codes of the scratch room swapped, the second capture read as the first, the pointer not escaped, the first error not
+  listed, the `Allow` header lost, a bool read inverted, a header decoded, the empty pair skipped, the chain cut after one
+  parameter, a parameter not linked to its operation, an unknown key given the wrong place) each fail at least one test. The
+  first round missed one: no test said a header is not decoded; it has one now.
+* **Not converted:** `examples/users_pg` and `examples/users_threads` keep `web.find` and their own checks, so their answer to a bad
+  parameter is the old sentence and `users_pg` could not be built or run here (no PostgreSQL server). The suites assert a status and the contract, not a sentence, so
+  they agree on everything they check; the README's "byte for byte" is qualified.

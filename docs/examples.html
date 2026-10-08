@@ -194,7 +194,7 @@ Content-Length: 369
       <tr><th>Malformed JSON</th><td><code>400</code>, saying what failed and at which byte</td></tr>
       <tr><th>Another content type</th><td><code>415</code></td></tr>
       <tr><th>A body that breaks the schema</th><td><code>422</code>, every error, as above</td></tr>
-      <tr><th>An id that is not a positive integer</th><td><code>422</code></td></tr>
+      <tr><th>An id that is not a positive integer</th><td><code>422</code>, at <code>/path/id</code></td></tr>
       <tr><th>No such user</th><td><code>404</code> as <code>problem+json</code></td></tr>
     </tbody>
   </table></div>
@@ -217,9 +217,13 @@ Content-Type: application/problem+json
 
 $ curl -i 'localhost:8080/users?limit=0'
 HTTP/1.1 422 Unprocessable Content
+Content-Type: application/problem+json
 
-{"type":"about:blank","title":"Unprocessable Content","status":422,"detail":"limit must be an integer from 1 to 100"}</code></pre>
+{"type":"about:blank","title":"Unprocessable Content","status":422,"count":1,"errors":[{"pointer":"/query/limit","code":"minimum","detail":"is below the minimum"}]}</code></pre>
   <p class="note">The <code>204</code> has no body and neither <code>Content-Length</code> nor <code>Content-Type</code>. An unknown query key is a <code>422</code> as well: a client that misspells <code>limit</code> should be told.</p>
+  <p class="sub" style="margin-top:1.2rem">A parameter is judged like a body: every error, with where it is. Here three at once, from <code>web.dispatch</code>, before the handler runs:</p>
+  <pre class="code" tabindex="0"><code>$ curl -s 'localhost:8080/users?limit=101&amp;offset=-1&amp;nope=1'
+{"type":"about:blank","title":"Unprocessable Content","status":422,"count":3,"errors":[{"pointer":"/query/limit","code":"maximum","detail":"is above the maximum"},{"pointer":"/query/offset","code":"minimum","detail":"is below the minimum"},{"pointer":"/query/nope","code":"unknown","detail":"is not a known field"}]}</code></pre>
   <div class="fitwrap"><table class="fit">
     <thead><tr><th>Route</th><th>What it does</th></tr></thead>
     <tbody>
@@ -256,7 +260,7 @@ build/users_pg 8080 127.0.0.1 5432 postgres users_pg - - 4     # ... &lt;passwor
 <section id="not">
   <h2>What these cases do not cover yet</h2>
   <div class="cols">
-    <div class="no"><h3>Not built</h3><ul><li>Dispatch, and parameters validated before the handler runs (the handler still checks <code>limit</code> and <code>id</code>)</li><li>Middleware, authentication, dependency injection</li><li>TLS (cancho has a server and an <code>https_hello</code> example; none of these services has been put behind it), streaming a response</li></ul></div>
+    <div class="no"><h3>Not built</h3><ul><li>Defaults declared once (the handler still says what <code>limit</code> is when it is absent), and <code>dispatch</code> in the PostgreSQL and threads examples</li><li>Middleware, authentication, dependency injection</li><li>TLS (cancho has a server and an <code>https_hello</code> example; none of these services has been put behind it), streaming a response</li></ul></div>
     <div class="no"><h3>Not shown here</h3><ul><li>More than one core in one process beyond the two-thread example, which keeps a store per thread</li><li>A service that is not the users API: <a href="https://github.com/alpibrusl/cancho-hooks">cancho-hooks</a> declares its API with <code>web</code> (<code>src/api.cho</code>), and its router and document are made from that declaration</li></ul></div>
   </div>
 </section>

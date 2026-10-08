@@ -145,9 +145,9 @@ table.fit.num thead th + th { text-align: right; }
 <div class="hero" id="top">
   <div>
     <img class="logo" src="logo.png" alt="cancho web: a rock caught in a web, in front of a blue circle" width="176" height="176">
-    <a class="badge" href="#status"><i></i>Alpha · the declaration half is built; dispatch and middleware are not</a>
+    <a class="badge" href="#status"><i></i>Alpha · declaration and parameter dispatch are built; middleware is not</a>
     <h1>Declare the API once.</h1>
-    <p class="lead">Each operation is declared once: its route, parameters, body and responses. The router and the OpenAPI document both come from that declaration, so a route cannot be served and undocumented. A body is checked by the same schema nodes that document it.</p>
+    <p class="lead">Each operation is declared once: its route, parameters, body and responses. The router and the OpenAPI document both come from that declaration, so a route cannot be served and undocumented. Parameters and bodies are checked by the same schema nodes that document them, and the handler is not reached for a request that breaks them.</p>
     <div class="cta"><a class="btn primary" href="examples.html#run">Run it</a><a class="btn ghost" href="examples.html">Examples</a><a class="btn ghost" href="#proof">See the evidence</a></div>
   </div>
   <div class="term" role="img" aria-label="A body that breaks four rules is refused with all four errors; a missing user is a 404 problem; the OpenAPI document lists the three paths."><div class="bar"><i></i><i></i><i></i></div>
@@ -171,7 +171,7 @@ Content-Type: <span class="y">application/problem+json</span>
 
 <div class="three">
   <div><h3>One declaration</h3><p>The route, its parameters, body and responses are written once. The router and the OpenAPI 3.1 document are made from it, and the document is checked in, so a change to the API is a change to a file.</p></div>
-  <div><h3>Every error, with where</h3><p>A body that breaks the rules gets all of its errors at once, each with a JSON Pointer, as RFC 9457 <code>problem+json</code>. No coercion: <code>"3"</code> is not an integer.</p></div>
+  <div><h3>Every error, with where</h3><p>A body or a parameter that breaks the rules gets all of its errors at once, each with where it is, as RFC 9457 <code>problem+json</code>. No coercion: <code>"3"</code> is not an integer, and neither is <code>5.0</code> in a query.</p></div>
   <div><h3>One thread, no C</h3><p>A single loop on <code>http.server</code>. <code>cancho authority</code> on the built service names what it can touch, and <code>ffi</code> and the filesystem are not on the list.</p></div>
 </div>
 
@@ -182,7 +182,8 @@ Content-Type: <span class="y">application/problem+json</span>
     <tbody>
       <tr><th>A body breaks the schema</th><td><code>422</code> with every error and its pointer. An unknown key is an error too.</td></tr>
       <tr><th>The body is not JSON, or the content type is not</th><td><code>400</code> with the byte it failed at; <code>415</code> for another content type.</td></tr>
-      <tr><th>A query key is unknown, or <code>limit</code> is out of range</th><td><code>422</code>. A client that misspells <code>limit</code> is told, not served the default.</td></tr>
+      <tr><th>A path, query or header parameter breaks its schema, a query key is unknown or repeated</th><td><code>422</code> from <code>web.dispatch</code>, before the handler runs: every error, each at <code>/query/limit</code>, <code>/path/id</code> or <code>/header/…</code> with a code (<code>maximum</code>, <code>type</code>, <code>unknown</code>, <code>duplicate</code>). A client that misspells <code>limit</code> is told, not served the default.</td></tr>
+      <tr><th>No such route, or the wrong method</th><td><code>404</code> as <code>problem+json</code>; <code>405</code> with <code>Allow</code>. Both written by <code>dispatch</code>.</td></tr>
       <tr><th>A user is deleted</th><td><code>204</code> with no body and neither <code>Content-Length</code> nor <code>Content-Type</code>, framed correctly even when pipelined.</td></tr>
       <tr><th>The store is full</th><td><code>503</code>, not a crash. The example holds up to 100,000 users or 64 MiB.</td></tr>
       <tr><th>A route is added to the declaration</th><td>It is in <code>/openapi.json</code>. A route that is served and deliberately not documented (the document itself) is declared <code>internal</code>.</td></tr>
@@ -192,7 +193,7 @@ Content-Type: <span class="y">application/problem+json</span>
 
 <section id="how">
   <h2>How it works</h2>
-  <p class="sub">The application keeps its loop. <code>web</code> is the declaration half: it routes and it documents. A framework that owned the loop would need a handler to be handed a view of buffers it cannot name a region for, which does not type-check in cancho today (<a href="https://github.com/alpibrusl/cancho-web/blob/main/docs/design.md">design §2</a>).</p>
+  <p class="sub">The application keeps its loop. <code>web</code> declares, routes, documents and judges parameters: <code>web.dispatch</code> is called in the loop where <code>web.find</code> was, and it is not a callback. A framework that owned the loop would need a handler to be handed a view of buffers it cannot name a region for, which does not type-check in cancho today (<a href="https://github.com/alpibrusl/cancho-web/blob/main/docs/design.md">design §2</a>).</p>
   <div class="two">
     <figure class="figure">
       <svg viewBox="0 0 440 260" role="img" aria-label="At start-up, one declaration of operations produces the router and the OpenAPI document. At run time the application's loop waits, takes a request, finds its route, runs the handler and responds.">
@@ -205,7 +206,7 @@ Content-Type: <span class="y">application/problem+json</span>
         <rect class="box" x="6" y="140" width="428" height="112" rx="12"/><text class="t" x="20" y="162">your loop</text>
         <rect class="box" x="20" y="176" width="86" height="60" rx="8"/><text class="s" x="63" y="202" text-anchor="middle">server.wait</text><text class="s" x="63" y="220" text-anchor="middle">I/O, once</text>
         <rect class="box" x="124" y="176" width="86" height="60" rx="8"/><text class="s" x="167" y="202" text-anchor="middle">server.next</text><text class="s" x="167" y="220" text-anchor="middle">one request</text>
-        <rect class="hot" x="228" y="176" width="92" height="60" rx="8"/><text class="s" x="274" y="202" text-anchor="middle">find · handle</text><text class="s" x="274" y="220" text-anchor="middle">validate body</text>
+        <rect class="hot" x="228" y="176" width="92" height="60" rx="8"/><text class="s" x="274" y="202" text-anchor="middle">dispatch</text><text class="s" x="274" y="220" text-anchor="middle">then handle</text>
         <rect class="box" x="338" y="176" width="86" height="60" rx="8"/><text class="s" x="381" y="202" text-anchor="middle">respond</text><text class="s" x="381" y="220" text-anchor="middle">the answer</text>
         <path class="ar" d="M106 206H122" marker-end="url(#h)"/><path class="ar" d="M210 206H226" marker-end="url(#h)"/><path class="ar" d="M320 206H336" marker-end="url(#h)"/>
         <path class="ar dash" d="M335 104C335 130 300 150 280 174" marker-end="url(#h)"/>
@@ -220,10 +221,12 @@ api = web.respond(heap, api, op, 200, "the user", user);
 api = web.respond_problem(heap, api, op, 404);
 api = web.respond_problem(heap, api, op, 422);
 
-// in the handler: the id the router answered
-let id = web.find(api, method, path, params);
-if id == 3 { return create(...); }</code></pre>
-      <figcaption><code>path_id</code> and <code>user</code> are <code>cancho-schema</code> nodes: the ones that validate are the ones that appear in the document.</figcaption>
+// in the loop: the route, with its parameters judged
+let (routed, id) = web.dispatch(heap, api, sc, request,
+    table, params, args, scratch, out, keep);
+if id == web.answered() { return routed; }   // 404, 405, 422
+let id_value = web.int_arg(args, id_slot);   // valid, 1..99</code></pre>
+      <figcaption><code>path_id</code> and <code>user</code> are <code>cancho-schema</code> nodes: the ones that validate are the ones that appear in the document. <code>dispatch</code> keeps nothing and allocates nothing for a request that is fine.</figcaption>
     </figure>
   </div>
 </section>
@@ -235,7 +238,7 @@ if id == 3 { return create(...); }</code></pre>
     <div><b>27</b><span>end-to-end tests over real sockets, run against the built service</span></div>
     <div><b>8,447</b><span>requests generated by Schemathesis from the document in the last 500-example run; none failing</span></div>
     <div><b>byte for byte</b><span>the served document is the checked-in <code>openapi.json</code>, and validates as OpenAPI 3.1</span></div>
-    <div><b>every</b><span>response any test sees must be one the document declares, with a body that validates against its schema</span></div>
+    <div><b>20</b><span>deliberate breakages of <code>dispatch</code> and the code under it, each caught by a test</span></div>
   </div>
   <p class="note"><a href="evidence.html">What the tests cover, what they found, and what is not claimed</a></p>
   <div class="cols">
@@ -274,7 +277,7 @@ if id == 3 { return create(...); }</code></pre>
   <div class="fitwrap"><table class="fit wide">
     <thead><tr><th></th><th>You write</th><th>You get</th><th>You give up</th></tr></thead>
     <tbody>
-      <tr class="us"><th>cancho-web</th><td>An operation declaration, a handler that matches on the route id, your own loop</td><td>A contract that cannot drift from the routes, every body error at once, one thread, a report of what the program can touch</td><td>Dependency injection, middleware, <code>async</code>, a docs UI, for now; TLS and threads exist in cancho but nothing here has been built on them</td></tr>
+      <tr class="us"><th>cancho-web</th><td>An operation declaration, a handler that matches on the route id, your own loop</td><td>A contract that cannot drift from the routes, parameters and bodies judged by the nodes that document them, every error at once, one thread, a report of what the program can touch</td><td>Dependency injection, middleware, <code>async</code>, a docs UI, defaults declared once, for now; TLS and threads exist in cancho but nothing here has been built on them</td></tr>
       <tr><th>FastAPI</th><td>Decorated functions and pydantic models</td><td>Dependency injection, <code>async</code>, <code>/docs</code>, a large ecosystem</td><td>An order of magnitude of per-core speed in this test; a checked statement of what the program can do</td></tr>
     </tbody>
   </table></div>
@@ -288,7 +291,7 @@ if id == 3 { return create(...); }</code></pre>
   <h2>What you get</h2>
   <div class="grid">
     <div><h3>Operations</h3><p>Method, path pattern, an operation id; the route id is what the handler tests.</p></div>
-    <div><h3>Typed parameters</h3><p>Path, query and header parameters with a schema node each, written to the document. The handler still checks them; that is the next slice.</p></div>
+    <div><h3>Typed parameters</h3><p>Path, query and header parameters with a schema node each, written to the document <em>and</em> checked by <code>dispatch</code> before the handler runs. Values arrive in a slot table, already valid.</p></div>
     <div><h3>Validated bodies</h3><p><code>cancho-schema</code>: every error, a JSON Pointer each, strict objects, string length in code points.</p></div>
     <div><h3>problem+json</h3><p>RFC 9457, with <code>errors</code> and <code>count</code> for a body, and a named <code>Problem</code> component in the document.</p></div>
     <div><h3>OpenAPI 3.1</h3><p>Generated at start-up, checked against a stock validator, diffed in CI. Components, shared path parameters, response headers, plain-text answers.</p></div>
@@ -334,10 +337,10 @@ curl -s -XPOST -H 'Content-Type: application/json' -d '{"name":"Ada","age":36}' 
   <h2>Alpha: the declaration half is built</h2>
   <p class="note" style="margin:.2rem 0 .6rem">Alpha means the interfaces may change and nothing here is certified for production.</p>
   <ul>
-    <li><strong>Not built yet:</strong> dispatch (the handler is still an <code>if</code> on the route id), and parameter validation by construction: a path or query parameter that fails its schema is still a check the handler makes. <a href="https://github.com/alpibrusl/cancho-web/blob/main/docs/design.md">The design for it</a> is written (§9) and not yet built.</li>
+    <li><strong>Not built yet:</strong> defaults declared once (a handler still says what <code>limit</code> is when it is absent), and <code>dispatch</code> in the PostgreSQL and threads examples, which keep <code>web.find</code> and their own checks. <a href="https://github.com/alpibrusl/cancho-web/blob/main/docs/design.md">§9</a> says what <code>dispatch</code> does, what building it found, and what it cost: a read 1.5% slower, a refused parameter 10%.</li>
     <li><strong>No middleware, authentication or dependency injection</strong>; nothing checks a token.</li>
     <li><strong>TLS, threads and streaming exist in cancho and are not used here.</strong> cancho has a TLS 1.3 server (not independently reviewed) and an <code>http.server</code> that a terminator can drive (<code>examples/https_hello</code>); no service in this repository has been put behind it, so terminate TLS in front. Threads run the loop twice in <code>examples/users_threads</code>, with a store each; a store they share is not built. <code>http.server</code> can stream a response; <code>web</code> cannot declare one yet.</li>
-    <li>Responses are documented, not enforced: nothing checks that a handler answered what it declared. The contract tests do, from outside, for every request.</li>
+    <li>Responses are documented, not enforced: nothing checks that a handler answered what it declared. The contract tests do, from outside, for every request. A request <em>body</em> is still read by the handler (validated, but not by <code>dispatch</code>).</li>
     <li>The generated JSON Schema has no <code>$ref</code>/<code>$defs</code> of its own.</li>
     <li>The benchmark is one VM, one run. The ratios are the finding; the absolute figures are that VM&rsquo;s.</li>
   </ul>
