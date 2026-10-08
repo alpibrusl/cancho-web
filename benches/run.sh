@@ -9,7 +9,7 @@
 # `equivalent.py` sends the same requests to the cancho service and to every other
 # implementation and refuses to go on unless the statuses and the successful bodies
 # agree, and `edges.py` does the same for the implementations that are not frameworks'
-# to get wrong (the Go and C servers): a comparison of speeds is only a comparison if
+# to get wrong (the Go, fasthttp, axum and C servers): a comparison of speeds is only a comparison if
 # the work is the same work. The ceiling (a server that answers one canned reply)
 # does no work and is timed on GET one user only.
 set -euo pipefail
@@ -21,6 +21,8 @@ kload=${KLOAD:-/tmp/kload}
 [ -x "$kload" ] || gcc -O2 -o "$kload" "$here/benches/kload.c" -lpthread
 "$here/scripts/build.sh" "$here/examples/users/users.cho" "$here/build/users"
 (cd "$here/benches/go_users" && go build -o "$here/build/go_users" .)
+(cd "$here/benches/fasthttp_users" && go build -o "$here/build/fasthttp_users" .)
+(cd "$here/benches/axum_users" && cargo build --release --quiet && cp target/release/users "$here/build/axum_users")
 gcc -O2 -Wall -o "$here/build/floor" "$here/benches/c_floor/floor.c"
 gcc -O2 -Wall -o "$here/build/ceiling" "$here/benches/c_floor/ceiling.c"
 
@@ -33,7 +35,9 @@ NAMES+=("C ceiling (canned reply)");     CMDS+=("$here/build/ceiling \$PORT")
 NAMES+=("FastAPI, uvicorn (asyncio)");   CMDS+=("cd $here/benches/fastapi_users && python3 -m uvicorn app:app --port \$PORT")
 NAMES+=("FastAPI, uvloop + httptools");  CMDS+=("cd $here/benches/fastapi_users && python3 -m uvicorn app:app --port \$PORT --loop uvloop --http httptools")
 NAMES+=("FastAPI lean, uvloop + httptools"); CMDS+=("cd $here/benches/fastapi_users && LEAN=1 python3 -m uvicorn app:app --port \$PORT --loop uvloop --http httptools")
-LEX=0; GO=1; FLOOR=2; CEILING=3; FASTAPI=4
+NAMES+=("Go fasthttp");                  CMDS+=("$here/build/fasthttp_users \$PORT")
+NAMES+=("Rust axum (tokio, one thread)"); CMDS+=("$here/build/axum_users \$PORT")
+LEX=0; GO=1; FLOOR=2; CEILING=3; FASTAPI=4; FASTHTTP=7; AXUM=8
 
 BODY='{"name":"Ada Lovelace","email":"ada@example.org","age":36,"role":"admin","tags":["math","code"]}'
 BAD='{"name":""}'
@@ -57,16 +61,16 @@ PY
 }
 load() { taskset -c 2,3 "$kload" "$port" 2 16 "$secs" "$@"; }
 
-echo "== equivalence (the 16 requests; cancho users, Go, C floor, FastAPI)"
+echo "== equivalence (the 16 requests; cancho users, Go, fasthttp, axum, C floor, FastAPI)"
 declare -a PIDS PORTS
-for i in $LEX $GO $FLOOR $FASTAPI; do start $i; PIDS+=("$PID"); PORTS+=("$port"); done
+for i in $LEX $GO $FASTHTTP $AXUM $FLOOR $FASTAPI; do start $i; PIDS+=("$PID"); PORTS+=("$port"); done
 set +e
 python3 "$here/benches/equivalent.py" "${PORTS[@]}"; eq=$?
 for p in "${PIDS[@]}"; do PID=$p; stop; done
 [ $eq -eq 0 ] || exit 1
-echo "== edge cases (84 more; cancho users, Go, C floor)"
+echo "== edge cases (84 more; cancho users, Go, fasthttp, axum, C floor)"
 PIDS=(); PORTS=()
-for i in $LEX $GO $FLOOR; do start $i; PIDS+=("$PID"); PORTS+=("$port"); done
+for i in $LEX $GO $FASTHTTP $AXUM $FLOOR; do start $i; PIDS+=("$PID"); PORTS+=("$port"); done
 python3 "$here/benches/edges.py" "${PORTS[@]}"; eq=$?
 for p in "${PIDS[@]}"; do PID=$p; stop; done
 set -e
@@ -96,7 +100,7 @@ done
 
 echo
 echo "GET one user, latency in microseconds under that load (p50 p90 p99 p99.9 max):"
-for i in $LEX $GO $FLOOR $CEILING $FASTAPI; do
+for i in $LEX $GO $FASTHTTP $AXUM $FLOOR $CEILING $FASTAPI; do
   start "$i"; preload
   printf '%-40s %s\n' "${NAMES[$i]}" "$(KLOAD_EXPECT=200 load /users/500 lat | tail -1)"
   stop
