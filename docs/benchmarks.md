@@ -9,6 +9,9 @@
 >
 > Sections 1-2 are the FastAPI comparison; the Go and C comparison is
 > [below](#against-go-and-a-hand-written-c-server).
+>
+> **These are the tables of the first run.** The run of 2026-10-08, on the current code and a slower VM, and the two-core comparison are at
+> [the end](#the-run-of-2026-10-08-and-what-changed-since-the-first); the README and the project page quote that run.
 
 ## What is compared
 
@@ -64,7 +67,7 @@ service time *plus the queue of the others*):
 
 * **It is one core against one core.** Neither server uses a second; FastAPI is normally
   run with several worker processes, and cancho with `reuseport` copies. Per-core is the
-  fair comparison and not what a deployment does.
+  fair comparison and not what a deployment does. *Two cores each are measured below ([Two cores each](#two-cores-each-2026-10-08)): the gap narrows from 23-27x to 19-25x and does not close.*
 * **FastAPI is CPU-bound in Python, not in its server.** uvloop and httptools, which speed
   up the network layer, change almost nothing (they are within noise of plain asyncio, and
   slightly lower on two columns), and the lean variant -- no response validation -- gains
@@ -403,6 +406,93 @@ The client under this service, one connection against libpq and the Python clien
 
 [`examples/users_threads`](../examples/users_threads/users_threads.cho) runs the unchanged `users` loop in two threads, one `SO_REUSEPORT` listener, forked heap and forked clock each (cancho `docs/parallelism.md` section 9). Same workload as "Copies of the blocking service" (invalid `POST /users`, server on cores 0-1, load generator on 2-3), interleaved with two processes in three rounds of five runs: **threads 149,380 a second** (median of 15), **processes 141,208**; the ranges overlap almost completely, so the result is that threads are *not worse*, not that they are faster. A stateless service shares nothing either way; what threads add is the possibility of sharing a store, which is not built (each thread keeps its own, so this example is not a deployable service). Reproduced by cancho's `benches/parallel/threads_users.sh`.
 
+
+## The run of 2026-10-08, and what changed since the first
+
+The tables above are the first run. It was measured before `web.dispatch` and the schema changes, on a faster VM. Everything was run again, in one
+session (`benches/run.sh 3`), on the code of this branch and the VM of the section below. The equivalence gate passed for every implementation (the same 16
+requests and the same 84 more); FastAPI 0.142.4, uvicorn 0.53.0, uvloop 0.23.0, Go 1.24.7, the pinned cancho compiler. Same method as above: one core
+each, `kload` on cores 2 and 3, five seconds, three times, median.
+
+| requests a second, median of 3 | GET one user | GET a page of 20 | POST, invalid (422) | POST, create |
+|---|---:|---:|---:|---:|
+| C ceiling (a canned reply) | 90,700 | -- | -- | -- |
+| hand-written C (epoll) | 75,734 | 68,144 | 67,376 | 60,719 |
+| **cancho users** | **83,289** | **75,286** | **63,241** | **53,755** |
+| Go `net/http` | 65,216 | 53,792 | 47,011 | 41,051 |
+| FastAPI, uvicorn (asyncio) | 4,374 | 3,852 | 3,456 | 3,751 |
+| FastAPI, uvloop + httptools | 4,528 | 4,009 | 3,385 | 3,801 |
+| FastAPI lean, uvloop + httptools | 4,921 | 4,307 | 3,536 | 3,948 |
+
+| cancho against | GET one | page | invalid | create |
+|---|---:|---:|---:|---:|
+| FastAPI, best of three | 16.9x | 17.5x | 17.9x | 13.6x |
+| Go | 1.28x | 1.40x | 1.35x | 1.31x |
+| C floor | 1.10x | 1.10x | 0.94x | 0.89x |
+| C ceiling | 0.92x | | | |
+
+Latency of GET one user under that load (32 requests in flight; microseconds):
+
+| | p50 | p90 | p99 | p99.9 | max |
+|---|---:|---:|---:|---:|---:|
+| C ceiling | 224 | 298 | 478 | 1,217 | 2,729 |
+| C floor | 278 | 369 | 518 | 953 | 3,435 |
+| cancho users | 249 | 322 | 547 | 1,815 | 6,038 |
+| Go `net/http` | 393 | 460 | 841 | 1,303 | 4,087 |
+| FastAPI, uvicorn | 5,406 | 8,391 | 10,763 | 17,877 | 42,171 |
+
+**Which numbers change, and which do not.**
+
+* **This VM is slower than the first run's**: the ceiling is 90,700 here and was 137,180, and cancho's read is 0.65x of what it was (83,289 against 128,972). **FastAPI
+  barely moved** (4,921 against 5,216, 0.94x), which is why the ratio against it **fell from 15-26x to 14-18x** with no change to either program that explains it. A ratio between a Python program and a
+  loop that is bound by system calls depends on the machine; neither run is the "true" one, and the page quotes the second, the
+  one on the current code.
+* **Against Go: 1.3-1.4x here, 1.08-1.6x there.** Go lost less than cancho on a read (0.82x of its first-run figure against 0.65x), and cancho's page got faster where Go's lost 18%, so the ratio on a read fell (1.6x to 1.28x) and on a page rose (1.08x to 1.40x).
+* **Against the hand-written C floor, cancho is ahead on a read and a page (1.10x) and behind on a rejected body (0.94x) and a create (0.89x).** The first run had the page at 0.67x and the
+  others at 0.70-0.88x. On the page the C floor lost what the VM took (105,523 to 68,144, 0.65x) and cancho's did not (70,768 to 75,286, 1.06x), and that cancho's page is *faster* in
+  absolute terms on a slower VM is not explained here: the compiler revision and the program both changed since the first run, and neither was bisected. Treat the page ratio as the least settled.
+* **The p99 is 0.55 ms against FastAPI's 10.8 ms** (the first run: 0.44 against 11.8); against Go it is two thirds of Go's, where it was half.
+* **A single median of three.** The spread of a repeat on this VM is about 5%, a create up to 10%, so 0.94x and 0.89x on the C floor are real differences only if the other run's direction (0.88x and 0.70x) is
+  counted too: both runs have it behind there.
+
+## Two cores each (2026-10-08)
+
+`run.sh` is one core against one core, and FastAPI is not normally deployed that way. `benches/run_cores.sh` gives every server cores 0 and 1 and `kload` cores 2 and 3 of the same
+4-vCPU VM, with the one-core figure of each beside it. The workloads are the ones that share no state, because every process keeps its own store (a read of a stored user would find it on one worker and
+not on the other): `GET /health`, `POST /users` with a body that is refused, `GET /users?limit=0`. Median of 3, five seconds.
+
+| requests a second | GET /health | POST, invalid | GET ?limit=0 |
+|---|---:|---:|---:|
+| cancho, 1 process | 77,478 | 55,888 | 63,260 |
+| **cancho, 2 processes** (`users <port> reuseport`, twice) | **115,443** | **90,064** | **105,987** |
+| cancho, 2 threads of 1 process (`users_threads`) | 126,256 | 89,753 | 111,814 |
+| Go `net/http`, 1 core | 44,886 | 35,088 | 39,676 |
+| Go `net/http`, 2 cores | 58,956 | 45,593 | 50,540 |
+| FastAPI lean, 1 worker | 3,414 | 2,262 | 2,332 |
+| FastAPI lean, 2 workers | 6,169 | 4,307 | 4,217 |
+
+| what the second core gave | GET /health | POST, invalid | GET ?limit=0 |
+|---|---:|---:|---:|
+| cancho, 2 processes | 1.49x | 1.61x | 1.68x |
+| cancho, 2 threads | 1.63x | 1.61x | 1.77x |
+| Go | 1.31x | 1.30x | 1.27x |
+| FastAPI lean | 1.81x | 1.90x | 1.81x |
+
+| cancho, 2 processes, against | GET /health | POST, invalid | GET ?limit=0 |
+|---|---:|---:|---:|
+| FastAPI, 2 workers | 18.7x | 20.9x | 25.1x |
+| Go, 2 cores | 1.96x | 1.98x | 2.10x |
+| (one core each: FastAPI) | 22.7x | 24.7x | 27.1x |
+
+* **The second core narrows the gap with FastAPI and does not close it.** FastAPI scales best (1.8-1.9x), cancho 1.5-1.8x, Go 1.3x; against FastAPI's two workers cancho's two processes are 19-25x ahead, against 23-27x at one core.
+  **One cancho process is ahead of two FastAPI workers** by 13-15x on these workloads (77,478 against 6,169 on a health check).
+* **Threads and processes are the same within the noise**, as the earlier comparison found (`Two threads in one process`, above), and the threads example keeps a store each, so it is not a deployable service.
+* **cancho's two-core figures may be understated.** At 115,000 a second `kload` is near the most it was shown to drive on the first VM (131,000-142,000, checked there by giving it a third core), and that check was **not repeated on this VM**.
+  The ratios against FastAPI and Go are therefore lower bounds for the cancho side; the second core's gain for cancho may be larger than 1.5-1.8x.
+* **Go on two cores was not tuned** (`GOMAXPROCS` is the two visible cores, the default GC), and its 1.3x says more about that than about Go. A Go with `fasthttp` or a Rust `axum` would be a stronger yardstick and was not measured.
+* **Not measured:** four cores for the server (the VM has four, and the load generator needs two), a workload with state (a store shared between workers is not built), and memory.
+* An earlier version of this table was wrong and was discarded: `run_cores.sh` started one process for the "2 processes" row, so that row showed no scaling at all (77,622 against 77,251).
+  It started two after the first table was seen to say something the code could not do, and each contender now runs in its own process group so that no worker outlives its row.
 
 ## Dispatch: a change measured (2026-10-08)
 

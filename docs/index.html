@@ -258,17 +258,17 @@ let id_value = web.int_arg(args, id_slot);   // valid, 1..99</code></pre>
 
 <section id="numbers">
   <h2>Against FastAPI, Go and C, honestly.</h2>
-  <p class="sub">One core each, loopback, one 4-vCPU VM, one run, repeats within about 5% (a create up to 10%). Every implementation is first held to do the same work: the same requests, the same statuses and bodies. <strong>It is behind a hand-written C server</strong> on a page, a rejected body and a create; level with it on a read.</p>
+  <p class="sub">One core each, loopback, one 4-vCPU VM, one run (the second: <a href="evidence.html#bench">the first is in the evidence</a>), repeats within about 5% (a create up to 10%). Every implementation is first held to do the same work: the same requests, the same statuses and bodies. <strong>It is behind a hand-written C server</strong> on a rejected body and a create (by 6% and 11%) and ahead of it on a read and a page.</p>
   <div class="two" style="grid-template-columns:1fr">
-    <figure class="figure"><img src="figures/bench.svg" width="700" height="518" alt="Requests per second on one core in four cells. cancho-web is 15 to 26 times FastAPI, ahead of Go net/http in all four, level with hand-written C on a read and behind it on the other three."><figcaption>Median of 3, requests a second, the figures of <a href="evidence.html#bench">the table</a>. FastAPI is its best of three set-ups in each column. Against FastAPI a gap of 15&ndash;26&times; says mostly that Python&rsquo;s cost per request is high; the Go and C servers are there so that a number is a position, not only a ratio.</figcaption></figure>
+    <figure class="figure"><img src="figures/bench.svg" width="700" height="518" alt="Requests per second on one core in four cells. cancho-web is 14 to 18 times FastAPI, ahead of Go net/http in all four, ahead of hand-written C on a read and a page and behind it on the other two."><figcaption>Median of 3, requests a second, the figures of <a href="evidence.html#bench">the table</a>. FastAPI is its best of three set-ups in each column. Against FastAPI a gap of 14&ndash;18&times; says mostly that Python&rsquo;s cost per request is high; the Go and C servers are there so that a number is a position, not only a ratio.</figcaption></figure>
   </div>
   <div class="stats">
-    <div><b>15&ndash;26&times;</b><span>FastAPI, one core each</span></div>
-    <div><b>0.44 ms</b><span>p99 on a read (FastAPI: 11.8 ms)</span></div>
-    <div><b>1.1&ndash;1.6&times;</b><span>Go <code>net/http</code>, with half the p99</span></div>
-    <div><b>94%</b><span>of what one core can do over loopback TCP (a server that answers one canned reply)</span></div>
+    <div><b>14&ndash;18&times;</b><span>FastAPI, one core each (19&ndash;25&times; its two workers, on two cores each)</span></div>
+    <div><b>0.55 ms</b><span>p99 on a read (FastAPI: 10.8 ms)</span></div>
+    <div><b>1.3&ndash;1.4&times;</b><span>Go <code>net/http</code>, with two thirds of its p99</span></div>
+    <div><b>92%</b><span>of what one core can do over loopback TCP (a server that answers one canned reply)</span></div>
   </div>
-  <p class="note">None of this measures TLS, a real handler&rsquo;s work or more than one core (the two-thread example is measured in <a href="evidence.html#threads">the evidence</a>). A service that spends 5 ms in a query is 5 ms slower in all of them.</p>
+  <p class="note">None of this measures TLS or a real handler&rsquo;s work. Two cores each are in <a href="evidence.html#cores">the evidence</a>: the gap with FastAPI narrows to 19&ndash;25&times; and does not close. A first run, on a faster VM, had 15&ndash;26&times;: against a Python program the ratio depends on the machine. A service that spends 5 ms in a query is 5 ms slower in all of them.</p>
 </section>
 
 <section id="fit">

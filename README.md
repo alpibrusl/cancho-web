@@ -35,7 +35,7 @@ once ([`docs/design.md`](docs/design.md) §8 and §9.10 say what is next and why
 * **A contract that is a file.** The served document is byte for byte the checked-in `openapi.json`, and Schemathesis generates requests from it.
 * **Who may call, declared.** Bearer schemes, `require` and `no_auth` are written to the document and can be read back; nothing here checks a token.
 * **A package.** `web` is published as a store, so a project names it in `cancho.toml` instead of copying a file.
-* **Fast, measured.** 15-26x FastAPI and 1.1-1.6x Go `net/http` on one core; level with a hand-written C server on a read, and behind it on the rest ([benchmarks](#benchmarks)).
+* **Fast, measured.** 14-18x FastAPI and 1.3-1.4x Go `net/http` on one core, 19-25x FastAPI's two workers on two; ahead of a hand-written C server on a read and a page, 6-11% behind it on the rest ([benchmarks](#benchmarks)).
 * **PostgreSQL**, optionally, with a pool: the same API, the same tests, the same document.
 
 ## Requirements
@@ -327,19 +327,24 @@ comparison does and does not show):
 
 | requests a second | GET one | page of 20 | rejected body | create |
 |---|---:|---:|---:|---:|
-| **cancho** | **128,972** | **70,768** | **94,659** | **64,327** |
-| Go `net/http` | 79,772 | 65,654 | 60,278 | 53,580 |
-| hand-written C (epoll) | 117,958 | 105,523 | 107,680 | 91,783 |
-| FastAPI (best set-up) | 5,216 | 4,604 | 3,606 | 4,163 |
+| **cancho** | **83,289** | **75,286** | **63,241** | **53,755** |
+| Go `net/http` | 65,216 | 53,792 | 47,011 | 41,051 |
+| hand-written C (epoll) | 75,734 | 68,144 | 67,376 | 60,719 |
+| FastAPI (best set-up) | 4,921 | 4,307 | 3,536 | 3,948 |
 
-* against **FastAPI**: about 15-26x, and a p99 of 0.44 ms against 12 ms;
-* against **Go's `net/http`**: 1.1-1.6x ahead, with half the p99;
-* against the **hand-written C server**: level on a read, 12-33% behind on the rest, and 94% of
-  the most one core can do over loopback TCP (a server that answers one canned reply).
+* against **FastAPI**: 14-18x, and a p99 of 0.55 ms against 10.8 ms;
+* against **Go's `net/http`**: 1.3-1.4x ahead, with a p99 of two thirds of Go's;
+* against the **hand-written C server**: 1.10x ahead on a read and a page, 6% and 11% behind on a rejected body and a
+  create, and 92% of the most one core can do over loopback TCP (a server that answers one canned reply).
 
-One 4-vCPU VM, one run; repeats differ by about 5% (a create by up to 10%). The page endpoint
-was 40,755 in the first comparison: the comparison is what found the two causes, one in the
-example and one in cancho's `std.buffer`, both fixed.
+On **two cores each** (two processes sharing a port, against FastAPI's two workers and Go on two cores) the gap with FastAPI
+narrows and does not close: 19-25x, against 23-27x on one core. One cancho process is 13-15x ahead of two FastAPI workers.
+
+One 4-vCPU VM, one run; repeats differ by about 5% (a create by up to 10%). **The first run, on a faster VM and before
+`web.dispatch`, had 128,972 on a read and 15-26x FastAPI**: FastAPI barely moved between the two VMs (5,216 and 4,921) and cancho did
+(0.65x), so a ratio against a Python program depends on the machine; both runs are in [`docs/benchmarks.md`](docs/benchmarks.md),
+with what each does and does not show. The page endpoint was 40,755 in the first comparison: the comparison is what found the two
+causes, one in the example and one in cancho's `std.buffer`, both fixed.
 
 ## Layout
 

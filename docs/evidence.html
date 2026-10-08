@@ -154,12 +154,12 @@ table.fit.num thead th + th { text-align: right; }
       <li>Every response any end-to-end test sees is one the served OpenAPI document declares, with a body that validates against the schema it declares.</li>
       <li>The served document validates as OpenAPI 3.1 and is byte for byte the checked-in <code>openapi.json</code>.</li>
       <li>Schemathesis, generating positive and negative requests and stateful scenarios from that document, found no failure in 8,447 cases (the last 500-example run).</li>
-      <li>On one core, 15&ndash;26&times; FastAPI and 1.1&ndash;1.6&times; Go <code>net/http</code>, with the same work checked first.</li>
+      <li>On one core, 14&ndash;18&times; FastAPI and 1.3&ndash;1.4&times; Go <code>net/http</code>, with the same work checked first. On two cores each, 19&ndash;25&times; FastAPI&rsquo;s two workers.</li>
     </ul></div>
     <div class="no"><h3>Not claimed</h3><ul>
-      <li>That it beats C: it is level on a read and 12&ndash;33% behind on the other three.</li>
-      <li>Anything about TLS, a real handler&rsquo;s work, memory or start-up time: none was measured. About several cores, only the two-thread example below.</li>
-      <li>That the absolute figures hold on another machine. One 4-vCPU VM, one run; repeats differ by about 5%, and a create by up to 10%.</li>
+      <li>That it beats C: it is 10% ahead of a hand-written server on a read and a page, and 6% and 11% behind it on a rejected body and a create. The first run had it behind on the page too, and the page ratio is the least settled.</li>
+      <li>Anything about TLS, a real handler&rsquo;s work, memory or start-up time: none was measured. About cores, only two (below).</li>
+      <li>That the absolute figures, or the ratios, hold on another machine. One 4-vCPU VM, one run; repeats differ by about 5%, and a create by up to 10%. The first run, on a faster VM, had cancho at 128,972 on a read and 15&ndash;26&times; FastAPI.</li>
       <li>That responses are enforced: they are documented, and checked from outside.</li>
     </ul></div>
   </div>
@@ -185,55 +185,96 @@ table.fit.num thead th + th { text-align: right; }
 
 <section id="bench">
   <h2>The benchmark</h2>
-  <p class="sub">Each server runs alone on core 0; the load generator (<code>benches/kload.c</code>, two threads of 16 keep-alive connections, closed loop) runs on cores 2 and 3. Five seconds of load, three times, median; &ldquo;create&rdquo; is a fixed 30,000 requests from a fresh process, because it adds state. One 4-vCPU VM (Intel Xeon 2.1 GHz, Linux 6.18, Python 3.11, FastAPI 0.142, uvicorn 0.54, Go 1.24). <code>benches/run.sh</code> reproduces it.</p>
+  <p class="sub">Each server runs alone on core 0; the load generator (<code>benches/kload.c</code>, two threads of 16 keep-alive connections, closed loop) runs on cores 2 and 3. Five seconds of load, three times, median; &ldquo;create&rdquo; is a fixed 30,000 requests from a fresh process, because it adds state. One 4-vCPU VM, one run (2026-10-08, on the current code; FastAPI 0.142.4, uvicorn 0.53.0, uvloop 0.23.0, Go 1.24.7). <code>benches/run.sh</code> reproduces it. <strong>An earlier run, on a faster VM, is at the end of this section.</strong></p>
   <h3 id="fastapi" style="margin-top:2rem">Against FastAPI, three ways</h3>
 <div class="fitwrap"><table class="fit num">
 <thead><tr><th></th><th>GET one user</th><th>GET a page of 20</th><th>POST, invalid (422)</th><th>POST, create</th></tr></thead>
 <tbody>
-<tr class="us"><th>cancho-web (users)</th><td class="n">128,972</td><td class="n">70,768</td><td class="n">94,659</td><td class="n">64,327</td></tr>
-<tr><th>FastAPI, uvicorn (asyncio)</th><td class="n">4,828</td><td class="n">4,028</td><td class="n">3,545</td><td class="n">4,091</td></tr>
-<tr><th>FastAPI, uvloop + httptools</th><td class="n">4,851</td><td class="n">4,208</td><td class="n">3,456</td><td class="n">4,129</td></tr>
-<tr><th>FastAPI lean, uvloop + httptools</th><td class="n">5,216</td><td class="n">4,604</td><td class="n">3,606</td><td class="n">4,163</td></tr>
+<tr class="us"><th>cancho-web (users)</th><td class="n">83,289</td><td class="n">75,286</td><td class="n">63,241</td><td class="n">53,755</td></tr>
+<tr><th>FastAPI, uvicorn (asyncio)</th><td class="n">4,374</td><td class="n">3,852</td><td class="n">3,456</td><td class="n">3,751</td></tr>
+<tr><th>FastAPI, uvloop + httptools</th><td class="n">4,528</td><td class="n">4,009</td><td class="n">3,385</td><td class="n">3,801</td></tr>
+<tr><th>FastAPI lean, uvloop + httptools</th><td class="n">4,921</td><td class="n">4,307</td><td class="n">3,536</td><td class="n">3,948</td></tr>
 </tbody></table></div>
-  <p class="note">About 25&times; on a read, 15&times; on a page, 26&times; on a rejected body and 15&times; on a create, against the best FastAPI figure in each column. uvloop and httptools change almost nothing: FastAPI is CPU-bound in Python, in routing, dependency resolution and pydantic, not in its server. The lean variant, whose handlers return stored bytes instead of going through a <code>response_model</code>, gains about 10%. Create is the noisiest column: identical binaries span 65,000&ndash;79,000 across runs.</p>
+  <p class="note">About 17&times; on a read, 17&times; on a page, 18&times; on a rejected body and 14&times; on a create, against the best FastAPI figure in each column. uvloop and httptools change almost nothing: FastAPI is CPU-bound in Python, in routing, dependency resolution and pydantic, not in its server. The lean variant, whose handlers return stored bytes instead of going through a <code>response_model</code>, gains about 10%. Create is the noisiest column.</p>
   <h3 style="margin-top:2rem">Against Go and a hand-written C server</h3>
   <p class="sub">FastAPI is a weak yardstick for speed. Go uses the standard library only (<code>net/http</code>, <code>encoding/json</code> into a struct, hand-written range checks, a mutex around the store, one core visible). The C floor is one thread, one epoll loop and a parser that knows four routes, validating and writing the stored answer in one pass: a hand-written baseline, not a proven minimum. The C ceiling answers every read with the same canned reply, and is the most one core can do over loopback TCP.</p>
 <div class="fitwrap"><table class="fit num">
 <thead><tr><th></th><th>GET one user</th><th>GET a page of 20</th><th>POST, invalid (422)</th><th>POST, create</th></tr></thead>
 <tbody>
-<tr><th>C ceiling (a canned reply)</th><td class="n">137,180</td><td class="n">&ndash;</td><td class="n">&ndash;</td><td class="n">&ndash;</td></tr>
-<tr><th>hand-written C (epoll)</th><td class="n">117,958</td><td class="n">105,523</td><td class="n">107,680</td><td class="n">91,783</td></tr>
-<tr class="us"><th>cancho-web (users)</th><td class="n">128,972</td><td class="n">70,768</td><td class="n">94,659</td><td class="n">64,327</td></tr>
-<tr><th>Go <code>net/http</code></th><td class="n">79,772</td><td class="n">65,654</td><td class="n">60,278</td><td class="n">53,580</td></tr>
-<tr><th>FastAPI, best of three</th><td class="n">5,216</td><td class="n">4,604</td><td class="n">3,606</td><td class="n">4,163</td></tr>
+<tr><th>C ceiling (a canned reply)</th><td class="n">90,700</td><td class="n">&ndash;</td><td class="n">&ndash;</td><td class="n">&ndash;</td></tr>
+<tr><th>hand-written C (epoll)</th><td class="n">75,734</td><td class="n">68,144</td><td class="n">67,376</td><td class="n">60,719</td></tr>
+<tr class="us"><th>cancho-web (users)</th><td class="n">83,289</td><td class="n">75,286</td><td class="n">63,241</td><td class="n">53,755</td></tr>
+<tr><th>Go <code>net/http</code></th><td class="n">65,216</td><td class="n">53,792</td><td class="n">47,011</td><td class="n">41,051</td></tr>
+<tr><th>FastAPI, best of three</th><td class="n">4,921</td><td class="n">4,307</td><td class="n">3,536</td><td class="n">3,948</td></tr>
 </tbody></table></div><div class="fitwrap"><table class="fit num">
 <thead><tr><th>cancho-web against</th><th>GET one</th><th>page</th><th>invalid</th><th>create</th></tr></thead>
 <tbody>
-<tr><th>Go</th><td class="n">1.6&times;</td><td class="n">1.08&times;</td><td class="n">1.6&times;</td><td class="n">1.2&times;</td></tr>
-<tr><th>hand-written C</th><td class="n">1.09&times; (a tie)</td><td class="n">0.67&times;</td><td class="n">0.88&times;</td><td class="n">0.70&times;</td></tr>
-<tr><th>C ceiling</th><td class="n">0.94&times;</td><td class="n"></td><td class="n"></td><td class="n"></td></tr>
+<tr><th>FastAPI, best of three</th><td class="n">16.9&times;</td><td class="n">17.5&times;</td><td class="n">17.9&times;</td><td class="n">13.6&times;</td></tr>
+<tr><th>Go</th><td class="n">1.28&times;</td><td class="n">1.40&times;</td><td class="n">1.35&times;</td><td class="n">1.31&times;</td></tr>
+<tr><th>hand-written C</th><td class="n">1.10&times;</td><td class="n">1.10&times;</td><td class="n">0.94&times;</td><td class="n">0.89&times;</td></tr>
+<tr><th>C ceiling</th><td class="n">0.92&times;</td><td class="n"></td><td class="n"></td><td class="n"></td></tr>
 </tbody></table></div><div class="fitwrap"><table class="fit num">
 <thead><tr><th>GET one user, 32 in flight (µs)</th><th>p50</th><th>p90</th><th>p99</th><th>p99.9</th><th>max</th></tr></thead>
 <tbody>
-<tr><th>C ceiling</th><td class="n">137</td><td class="n">222</td><td class="n">404</td><td class="n">1,513</td><td class="n">35,118</td></tr>
-<tr class="us"><th>cancho-web (users)</th><td class="n">156</td><td class="n">270</td><td class="n">442</td><td class="n">1,140</td><td class="n">16,995</td></tr>
-<tr><th>hand-written C</th><td class="n">178</td><td class="n">269</td><td class="n">433</td><td class="n">1,158</td><td class="n">19,645</td></tr>
-<tr><th>Go <code>net/http</code></th><td class="n">325</td><td class="n">483</td><td class="n">850</td><td class="n">1,770</td><td class="n">6,937</td></tr>
-<tr><th>FastAPI, uvicorn</th><td class="n">5,161</td><td class="n">8,318</td><td class="n">11,842</td><td class="n">14,805</td><td class="n">17,341</td></tr>
+<tr><th>C ceiling</th><td class="n">224</td><td class="n">298</td><td class="n">478</td><td class="n">1,217</td><td class="n">2,729</td></tr>
+<tr><th>hand-written C</th><td class="n">278</td><td class="n">369</td><td class="n">518</td><td class="n">953</td><td class="n">3,435</td></tr>
+<tr class="us"><th>cancho-web (users)</th><td class="n">249</td><td class="n">322</td><td class="n">547</td><td class="n">1,815</td><td class="n">6,038</td></tr>
+<tr><th>Go <code>net/http</code></th><td class="n">393</td><td class="n">460</td><td class="n">841</td><td class="n">1,303</td><td class="n">4,087</td></tr>
+<tr><th>FastAPI, uvicorn</th><td class="n">5,406</td><td class="n">8,391</td><td class="n">10,763</td><td class="n">17,877</td><td class="n">42,171</td></tr>
 </tbody></table></div>
-  <figure class="figure wide"><img src="figures/bench.svg" width="700" height="518" alt="Requests per second on one core in four cells, fastest first." ><figcaption>The first table above as a picture, drawn by <code>scripts/figures.py</code> from the table in the README.</figcaption></figure>
+  <figure class="figure wide"><img src="figures/bench.svg" width="700" height="518" alt="Requests per second on one core in four cells, fastest first." ><figcaption>The second table above as a picture, drawn by <code>scripts/figures.py</code> from the table in the README.</figcaption></figure>
   <div class="cols">
     <div><h3>What it says</h3><ul>
-      <li>On a read it is where a hand-written C server is, and at 94% of the kernel&rsquo;s limit: one core spends about 7 &micro;s a request in the socket path before any server code runs.</li>
-      <li>It is ahead of Go on every workload, with half the p99. That is Go&rsquo;s goroutine-per-connection runtime and GC on one core against a loop with neither; it says nothing about Go with several cores.</li>
-      <li>On a create or a rejected body it serves 12&ndash;30% fewer requests than the C floor, probably because it parses, validates and writes the answer in separate passes. That was not profiled.</li>
+      <li>On a read and a page it is 10% ahead of a hand-written C server, and at 92% of the kernel&rsquo;s limit: one core spends several microseconds a request in the socket path before any server code runs. The C server is a baseline that was not tuned further, so this is not a claim that cancho beats C.</li>
+      <li>It is ahead of Go on every workload, with two thirds of its p99. That is Go&rsquo;s goroutine-per-connection runtime and GC on one core against a loop with neither. Go on two cores is below, untuned.</li>
+      <li>On a create or a rejected body it serves 11% and 6% fewer requests than the C floor, probably because it parses, validates and writes the answer in separate passes. That was not profiled.</li>
     </ul></div>
     <div class="no"><h3>Not measured</h3><ul>
-      <li>Go with more than one core, or with Gin or fasthttp; Rust; Node.</li>
-      <li>Several cores beyond the one two-thread comparison below, and <code>reuseport</code> copies for the in-memory service; TLS; a real handler&rsquo;s work; resident memory and start-up time.</li>
-      <li>FastAPI&rsquo;s usual deployment: several worker processes. This is one core against one core.</li>
+      <li>Go with Gin or <code>fasthttp</code>; Rust; Node.</li>
+      <li>More than two cores for the server; TLS; a real handler&rsquo;s work; resident memory and start-up time.</li>
+      <li>FastAPI&rsquo;s usual deployment in the one-core tables: several worker processes. Two cores each are <a href="#cores">below</a>.</li>
     </ul></div>
   </div>
+  <h3 style="margin-top:2rem">The first run</h3>
+  <p class="sub">The same benchmark, on a faster VM and before <code>web.dispatch</code>. <strong>FastAPI barely moved between the two VMs (5,216 and 4,921) and cancho did (0.65&times;)</strong>, so the ratio against a Python program fell from 15&ndash;26&times; to 14&ndash;18&times; with no change to either program that explains it. A ratio like this depends on the machine; neither run is the true one, and this page quotes the later, on the current code. Against Go the first run had 1.08&ndash;1.6&times;, and against the C floor 1.09&times; on a read and 0.67&ndash;0.88&times; on the rest.</p>
+<div class="fitwrap"><table class="fit num">
+<thead><tr><th>the first run, a faster VM, before dispatch</th><th>GET one user</th><th>GET a page of 20</th><th>POST, invalid (422)</th><th>POST, create</th></tr></thead>
+<tbody>
+<tr class="us"><th>cancho-web (users)</th><td class="n">128,972</td><td class="n">70,768</td><td class="n">94,659</td><td class="n">64,327</td></tr>
+<tr><th>hand-written C (epoll)</th><td class="n">117,958</td><td class="n">105,523</td><td class="n">107,680</td><td class="n">91,783</td></tr>
+<tr><th>Go <code>net/http</code></th><td class="n">79,772</td><td class="n">65,654</td><td class="n">60,278</td><td class="n">53,580</td></tr>
+<tr><th>FastAPI, best of three</th><td class="n">5,216</td><td class="n">4,604</td><td class="n">3,606</td><td class="n">4,163</td></tr>
+<tr><th>cancho-web against FastAPI</th><td class="n">25&times;</td><td class="n">15&times;</td><td class="n">26&times;</td><td class="n">15&times;</td></tr>
+</tbody></table></div>
+</section>
+
+<section id="cores">
+  <h2>Two cores each</h2>
+  <p class="sub">The one-core tables are not how FastAPI is deployed. <code>benches/run_cores.sh</code> gives every server cores 0 and 1 and the load generator cores 2 and 3 of the same VM, with each one-core figure beside it. The workloads share no state, because every process keeps its own store: a health check, a refused body, a refused parameter. Median of 3, five seconds.</p>
+<div class="fitwrap"><table class="fit num">
+<thead><tr><th>requests a second, median of 3</th><th>GET /health</th><th>POST, invalid</th><th>GET ?limit=0</th></tr></thead>
+<tbody>
+<tr><th>cancho, 1 process</th><td class="n">77,478</td><td class="n">55,888</td><td class="n">63,260</td></tr>
+<tr class="us"><th>cancho, 2 processes (reuseport)</th><td class="n">115,443</td><td class="n">90,064</td><td class="n">105,987</td></tr>
+<tr><th>cancho, 2 threads of 1 process</th><td class="n">126,256</td><td class="n">89,753</td><td class="n">111,814</td></tr>
+<tr><th>Go <code>net/http</code>, 1 core</th><td class="n">44,886</td><td class="n">35,088</td><td class="n">39,676</td></tr>
+<tr><th>Go <code>net/http</code>, 2 cores</th><td class="n">58,956</td><td class="n">45,593</td><td class="n">50,540</td></tr>
+<tr><th>FastAPI lean, 1 worker</th><td class="n">3,414</td><td class="n">2,262</td><td class="n">2,332</td></tr>
+<tr><th>FastAPI lean, 2 workers</th><td class="n">6,169</td><td class="n">4,307</td><td class="n">4,217</td></tr>
+</tbody></table></div>
+  <div class="cols">
+    <div><h3>What it says</h3><ul>
+      <li>The second core narrows the gap with FastAPI and does not close it: cancho&rsquo;s two processes are 19&ndash;25&times; FastAPI&rsquo;s two workers, against 23&ndash;27&times; on one core. FastAPI scales best (1.8&ndash;1.9&times;), cancho 1.5&ndash;1.8&times;, Go 1.3&times;.</li>
+      <li><strong>One cancho process is 13&ndash;15&times; ahead of two FastAPI workers.</strong></li>
+      <li>Threads and processes are the same within the noise. The threads example keeps a store each, so it is not a deployable service.</li>
+    </ul></div>
+    <div class="no"><h3>Not claimed</h3><ul>
+      <li>cancho&rsquo;s two-core figures may be understated: at 115,000 a second the load generator is near the most it was shown to drive on the first VM, and that check was <strong>not repeated on this VM</strong>.</li>
+      <li>Go on two cores was not tuned, and a Go with <code>fasthttp</code> or a Rust <code>axum</code> would be a stronger yardstick. Neither was measured.</li>
+      <li>Four cores for the server, a workload with state, memory.</li>
+    </ul></div>
+  </div>
+  <p class="note">An earlier version of this table was wrong and was discarded: the script started one process for the &ldquo;2 processes&rdquo; row, so it showed no scaling at all (77,622 against 77,251). It started two once the table was seen to say something the code could not do.</p>
 </section>
 
 <section id="dispatch">

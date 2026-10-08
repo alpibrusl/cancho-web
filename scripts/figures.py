@@ -42,7 +42,7 @@ def bench_svg():
     rows = table()
     x0, width, bar, gap, head = 110, 450, 15, 4, 34
     block = head + len(rows) * (bar + gap) + 14
-    lines = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 %d" role="img" aria-label="Requests per second on one core in four cells, fastest first. cancho-web is far ahead of FastAPI in all four, ahead of Go net/http in all four, level with a hand-written C server on a read and behind it on the other three.">' % (22 + block * len(CELLS)), STYLE]
+    lines = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 %d" role="img" aria-label="Requests per second on one core in four cells, fastest first. cancho-web is far ahead of FastAPI in all four, ahead of Go net/http in all four, ahead of a hand-written C server on a read and a page and behind it on the rejected body and the create.">' % (22 + block * len(CELLS)), STYLE]
     lines.append('<text class="t" x="0" y="16">Requests per second, one core each, higher is better (median of 3, one run)</text>')
     for n, label in enumerate(CELLS):
         y0 = 30 + n * block
