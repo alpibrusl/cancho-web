@@ -1057,20 +1057,12 @@ fn rec[&a](api: &a Api, i: int, k: int) -> [] int {
     return vec.get(api.recs, i + k);
 }
 
-// The record index of operation `op` (1-based), or -1.
+// The record index of operation `op` (1-based), or -1: the index `operation` kept, not a scan of the records.
 fn op_at[&a](api: &a Api, op: int) -> [] int {
-    var seen = 0;
-    var i = 0;
-    while i < vec.size(api.recs) {
-        if rec(api, i, 0) == tag_op() {
-            seen = seen + 1;
-            if seen == op {
-                return i;
-            }
-        }
-        i = i + rec_width();
+    if op < 1 || op > api.ops {
+        return 0 - 1;
     }
-    return 0 - 1;
+    return vec.get(api.index, 2 * (op - 1));
 }
 
 // Whether operations at records `i` and `j` have the same path.

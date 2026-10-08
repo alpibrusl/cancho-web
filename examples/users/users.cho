@@ -186,7 +186,7 @@ fn user_fields[&h](heap: &!h Heap, s: schema.Schema, obj: int, id: int, name: in
 //
 // A route's id is the order it is declared in, which is what `handle` tests: health 1,
 // list 2, create 3, get 4, delete 5, the document 6.
-fn setup[&h](heap: &!h Heap) -> [heap] (schema.Schema, int, web.Api, buffer.Buffer) {
+fn setup[&h](heap: &!h Heap, fillers: int) -> [heap] (schema.Schema, int, web.Api, buffer.Buffer) {
     var s = schema.empty(heap);
     let (s1, name) = schema.new_string(heap, s, 1, 64);
     let (s2, email) = schema.new_string(heap, s1, 3, 120);
@@ -270,6 +270,21 @@ fn setup[&h](heap: &!h Heap) -> [heap] (schema.Schema, int, web.Api, buffer.Buff
 
     let (a6, op_doc) = web.internal(heap, api, "GET", "/openapi.json");
     api = a6;
+
+    // `users <port> - <n>` declares `n` more operations after these (`GET /filler/<i>/:id`, with a path parameter each), which
+    // nothing answers: a larger API, to see what a request to the six above costs when it is larger (`docs/benchmarks.md`).
+    var filler = 0;
+    while filler < fillers {
+        var pattern = buffer.append(heap, buffer.empty(heap, 32), "/filler/");
+        pattern = buffer.push_nat(heap, pattern, filler);
+        pattern = buffer.append(heap, pattern, "/:id");
+        borrow pattern as &pb in {
+            let (af, opf) = web.operation(heap, api, "GET", buffer.bytes(pb), buffer.bytes(pb));
+            api = web.path_param(heap, af, opf, "id", path_id);
+        }
+        buffer.drop(heap, pattern);
+        filler = filler + 1;
+    }
 
     api = web.component(heap, api, "NewUser", new_user);
     api = web.component(heap, api, "User", user);
@@ -538,6 +553,9 @@ fn handle[&h, &r, &sc, &d, &q, &t, &p, &g, &x, &b](heap: &!h Heap, api: &r web.A
         }
     } else if id == 6 {
         answer = server.reply(heap, answer, 200, doc, keep);
+    } else {
+        // A route that was declared and has no handler here (only the filler routes of `users <port> - <n>`): an answer, never silence.
+        answer = problem(heap, answer, 404, "Not Found", "no handler for this route", keep);
     }
     return (answer, st);
 }
@@ -546,12 +564,12 @@ fn handle[&h, &r, &sc, &d, &q, &t, &p, &g, &x, &b](heap: &!h Heap, api: &r web.A
 // The loop
 // ---------------------------------------------------------------------
 
-fn run[&h, &k, &l](heap: &!h Heap, clock: &k Clock, listener: &!l Listener) -> [heap, conn_accept, conn_read, conn_write, poll, clock] int {
+fn run[&h, &k, &l](heap: &!h Heap, clock: &k Clock, listener: &!l Listener, fillers: int) -> [heap, conn_accept, conn_read, conn_write, poll, clock] int {
     match poller_new() {
         Polling::Ok(p) => {
             var srv = server.open(heap, p, listener, 16384, 0, 9);
             var store = store_new(heap);
-            let (sc, new_user, api, doc) = setup(heap);
+            let (sc, new_user, api, doc) = setup(heap, fillers);
             var widest = 1;
             borrow api as &ar in {
                 if web.most_params(ar) > 1 {
@@ -634,13 +652,21 @@ fn main(world: World) -> [] int {
     release(ffi);
     var port = 0 - 1;
     var reuse = 0;
+    var fillers = 0;
     borrow args as &g in {
         if arg_count(g) > 1 {
             port = number_of(arg(g, 1));
         }
         // `users <port> reuseport`: several copies may listen on one port, each with its own store (`benches/run_cores.sh`).
-        if arg_count(g) > 2 {
+        if arg_count(g) > 2 && bytes.equal(arg(g, 2), "reuseport") {
             reuse = 1;
+        }
+        // `users <port> - <n>`: `n` operations more than the six the API has (`benches/scale.sh`).
+        if arg_count(g) > 3 {
+            fillers = number_of(arg(g, 3));
+            if fillers > 10000 {
+                fillers = 10000;
+            }
         }
     }
     var status = 2;
@@ -663,7 +689,7 @@ fn main(world: World) -> [] int {
                                 buffer.drop(h, line);
                             }
                             borrow clock as &c in {
-                                status = run(h, c, lh);
+                                status = run(h, c, lh, fillers);
                             }
                         }
                     }
