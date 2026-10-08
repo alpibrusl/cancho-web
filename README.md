@@ -314,10 +314,11 @@ The real binary on a real socket, a real HTTP client, and:
 ```
 cancho test tests/web_test.cho src/web.cho build/deps/*.cho --std   # `web` unit tests (after a build has fetched build/deps)
 benches/check.sh                  # the Go and C implementations still do the same work (seconds)
+scripts/check-authority.sh        # what the service can touch (`cancho authority`) is the pinned docs/authority.json
 ```
 
 CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) builds the pinned compiler and
-runs the end-to-end tests, Schemathesis included, and `benches/check.sh` on every push.
+runs the end-to-end tests, Schemathesis included, `benches/check.sh`, and the authority report check on every push.
 
 ## Benchmarks
 
@@ -356,6 +357,8 @@ src/web.cho                the declaration layer: operations, parameters, bodies
 examples/users/users.cho   the service: schemas, the declared API, handlers, store, the loop
 examples/users/openapi.json  the contract as a file, checked against what the service serves
 scripts/build.sh          fetch + verify the locked packages, then build
+scripts/check-authority.sh  the service's `cancho authority` report against docs/authority.json (CI fails when it changes)
+docs/authority.json       what the users service can touch, as last approved: effects, bounds, foreign symbols
 deps/*.lock               the packages this builds against, pinned by hash
 tests/e2e.py              the end-to-end tests (real binary, real sockets, Schemathesis)
 tests/web_test.cho         unit tests of `web`: documents derived by hand, compared byte for byte

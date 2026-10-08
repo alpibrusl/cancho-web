@@ -132,6 +132,14 @@ jobs:
           $CANCHO test tests/web_test.cho src/web.cho build/deps/*.cho --std
           $CANCHO fmt --check examples src tests
 
+      # What the users service can touch, as `cancho authority` reports it, is pinned in docs/authority.json: a new capability or foreign
+      # call is a red diff that only committing the new file makes green (scripts/check-authority.sh). Needs build/deps from the builds above.
+      - name: The authority report is the committed one
+        working-directory: web
+        env:
+          CANCHO: ${{ github.workspace }}/cancho/target/release/cancho
+        run: scripts/check-authority.sh
+
       # `web` as a package: the committed store is what `src/web.cho` publishes.
       - name: The package store is the published source
         working-directory: web
