@@ -1,19 +1,21 @@
+<p align="center"><img src="docs/logo.png" alt="cancho-web" width="220"></p>
+
 # cancho-web
 
 [![ci](https://github.com/alpibrusl/cancho-web/actions/workflows/ci.yml/badge.svg)](https://github.com/alpibrusl/cancho-web/actions/workflows/ci.yml)
 
-A web layer for [cancho](https://github.com/alpibrusl/cancho), a typed systems language
-with linear ownership and capability effects: routes with typed parameters, request bodies
-validated by [`cancho-schema`](https://github.com/alpibrusl/cancho-schema), `problem+json`
-errors, and an OpenAPI document generated from the same declarations -- on top of the
-`http.server` package that `cancho` ships (`packages/http-server/`).
+**Declare the API once.** A web layer for [cancho](https://github.com/alpibrusl/cancho), a typed systems language
+with linear ownership and capability effects: routes with typed parameters, request bodies validated by
+[`cancho-schema`](https://github.com/alpibrusl/cancho-schema), `problem+json` errors, and an OpenAPI document generated from
+the same declarations -- on top of the `http.server` package that `cancho` ships (`packages/http-server/`). The
+[project page](https://alpibrusl.github.io/cancho-web/) has the pictures, [the examples](https://alpibrusl.github.io/cancho-web/examples.html)
+and [the evidence](https://alpibrusl.github.io/cancho-web/evidence.html).
 
-One thread, a `Poller`, no `Ffi`, no `extern fn`: the compiled server's authority report
-names exactly what it can do, and C is not on the list.
+One thread, a `Poller`, no `Ffi`, no `extern fn`: the compiled server's authority report names exactly what it can do, and C is not on the list.
 
 ## Status
 
-**The declaration half of the framework is built.**
+**Alpha. The declaration half of the framework is built.**
 [`examples/users`](examples/users/users.cho) is a CRUD JSON API over `http.server` and
 `cancho-schema`, held to its own OpenAPI document by an end-to-end test over real sockets
 and by Schemathesis, and benchmarked against FastAPI, Go and C ([below](#benchmarks)).
@@ -22,7 +24,17 @@ responses -- and the router and the OpenAPI document both come from that declara
 (the document is checked in as [`examples/users/openapi.json`](examples/users/openapi.json),
 so a change to the API is a change to a file). Not yet: dispatch -- the handler is still an
 `if` on the route id and still checks its own path and query parameters -- and middleware
-([`docs/design.md`](docs/design.md) §8 says what is next and why).
+([`docs/design.md`](docs/design.md) §8 says what is next and why, §9 designs parameters validated by construction).
+
+## What you get
+
+* **One declaration.** An operation's route, parameters, body and responses are written once; the router and the OpenAPI 3.1 document are made from it, so a route cannot be served and undocumented.
+* **Every error at once.** A body that breaks the rules gets all of its errors, each with its JSON Pointer, as RFC 9457 `application/problem+json`. No coercion.
+* **A contract that is a file.** The served document is byte for byte the checked-in `openapi.json`, and Schemathesis generates requests from it.
+* **Who may call, declared.** Bearer schemes, `require` and `no_auth` are written to the document and can be read back; nothing here checks a token.
+* **A package.** `web` is published as a store, so a project names it in `cancho.toml` instead of copying a file.
+* **Fast, measured.** 15-26x FastAPI and 1.1-1.6x Go `net/http` on one core; level with a hand-written C server on a read, and behind it on the rest ([benchmarks](#benchmarks)).
+* **PostgreSQL**, optionally, with a pool: the same API, the same tests, the same document.
 
 ## Requirements
 
@@ -322,6 +334,9 @@ benches/                  the benchmark: the FastAPI, Go and C implementations o
                           API, the load generator, and the checks that they do the same work
 docs/design.md            what the framework layer will be, and what building the example found
 docs/benchmarks.md        the method, the numbers, and how to read them
+docs/index.html           the project page; examples.html and evidence.html beside it
+docs/logo.jpg             the logo as given; scripts/site_assets.py derives the page's images from it
+scripts/figures.py        draws docs/figures/bench.svg from the table in this file
 ```
 
 ## Limitations
@@ -333,10 +348,14 @@ schema is still a check the handler makes); middleware, auth, and anything like 
 dependency injection; TLS; streaming bodies; more than one core; `$ref`/`$defs` in the generated
 JSON Schema. The design document says which of these are decided and which are open.
 
-## Documentation
+## Learn more
 
-- [`docs/design.md`](docs/design.md): what the framework layer will be, and what building the example found.
-- [`docs/benchmarks.md`](docs/benchmarks.md): the method, the numbers, and how to read them.
+| | |
+|---|---|
+| [the project page](https://alpibrusl.github.io/cancho-web/), [the examples](https://alpibrusl.github.io/cancho-web/examples.html) | what it is, and the users API run |
+| [the evidence](https://alpibrusl.github.io/cancho-web/evidence.html) | the tests, what building it found, what is not claimed |
+| [`docs/design.md`](docs/design.md) | what the framework layer will be, and what building the example found |
+| [`docs/benchmarks.md`](docs/benchmarks.md) | the method, the numbers, and how to read them |
 
 ## Contributing
 

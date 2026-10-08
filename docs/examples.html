@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cancho-web: examples</title>
+<meta name="description" content="Runnable sessions with cancho-web: create, read and page users, every error at once, the generated OpenAPI document, the same API on PostgreSQL. Every response shown is real output.">
+<meta property="og:title" content="cancho-web: examples">
+<meta property="og:description" content="The users API, run: what it answers, what it refuses, and the document it serves.">
+<meta name="color-scheme" content="light dark">
+<meta property="og:type" content="website">
+<meta property="og:image" content="https://alpibrusl.github.io/cancho-web/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="cancho-web examples: the users API, with the answers it gives and the document it serves.">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="icon" type="image/png" sizes="64x64" href="favicon.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta property="og:url" content="https://alpibrusl.github.io/cancho-web/examples.html">
+<style>
+
+:root {
+  --bg: #fbfbfc; --fg: #14171c; --muted: #566170; --line: #e1e4ea; --surface: #ffffff; --soft: #f0f3f6;
+  --accent: #265e8d; --accent-fg: #ffffff; --good: #0f7b5f; --warn: #92400e; --warn-bg: #fdf6e7; --warn-line: #e0b765; --bad: #d1362f;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0d1217; --fg: #e8eaee; --muted: #9ba5b3; --line: #232932; --surface: #141a21; --soft: #182029;
+    --accent: #6fa3d6; --accent-fg: #0a1522; --good: #4fd1a5; --warn: #f3c77a; --warn-bg: #1d1a12; --warn-line: #8a6a2a; --bad: #ff6b63; }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; scroll-padding-top: 4rem; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 1rem/1.6 var(--font); }
+a { color: var(--accent); text-underline-offset: .15em; }
+.wrap { width: 100%; max-width: 68rem; margin: 0 auto; padding: 0 20px; }
+.skip { position: absolute; left: 16px; top: -4rem; background: var(--accent); color: var(--accent-fg); padding: .5rem .8rem; border-radius: 6px; z-index: 9; }
+.skip:focus { top: 8px; }
+a:focus-visible, .btn:focus-visible, pre:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+header.top { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+header.top .wrap { display: flex; align-items: center; gap: 1.5rem; height: 3.4rem; }
+.brand { font: 700 1rem var(--mono); color: var(--fg); text-decoration: none; letter-spacing: -.01em; white-space: nowrap; }
+nav { display: flex; gap: 1.2rem; margin-left: auto; }
+nav a { color: var(--muted); text-decoration: none; font-size: .93rem; white-space: nowrap; }
+nav a:hover { color: var(--fg); }
+@media (max-width: 40rem) { nav a.opt { display: none; } }
+
+h1 { font-size: clamp(2.3rem, 6.2vw, 4rem); line-height: 1.04; letter-spacing: -.035em; margin: 0 0 1rem; font-weight: 750; }
+h2 { font-size: clamp(1.6rem, 3.4vw, 2.2rem); line-height: 1.15; letter-spacing: -.025em; margin: 0 0 .5rem; font-weight: 700; }
+h3 { font-size: 1.05rem; margin: 0 0 .25rem; }
+p { margin: 0 0 1rem; }
+section { padding: 4.5rem 0 0; }
+.lead { font-size: 1.2rem; color: var(--muted); max-width: 34rem; }
+.sub { color: var(--muted); max-width: 38rem; }
+code { font-family: var(--mono); font-size: .9em; background: var(--soft); padding: .1em .35em; border-radius: 5px; }
+
+.hero { padding: 4rem 0 0; display: grid; gap: 2.5rem; align-items: center; }
+@media (min-width: 58rem) { .hero { grid-template-columns: 1.05fr 1fr; } }
+.badge { display: inline-flex; gap: .5rem; align-items: center; font-size: .82rem; color: var(--warn); background: var(--warn-bg); border: 1px solid var(--warn-line); padding: .22rem .7rem; border-radius: 999px; margin-bottom: 1.2rem; text-decoration: none; }
+.badge i { width: .5rem; height: .5rem; border-radius: 50%; background: var(--warn-line); display: inline-block; }
+.cta { display: flex; flex-wrap: wrap; gap: .7rem; margin-top: 1.6rem; }
+.btn { display: inline-block; padding: .65rem 1.15rem; border-radius: 8px; font-weight: 600; text-decoration: none; border: 1px solid var(--accent); }
+.btn.primary { background: var(--accent); color: var(--accent-fg); }
+.btn.ghost { color: var(--accent); }
+.btn.ghost:hover { background: var(--soft); }
+
+.term { background: #0d1117; color: #d6dde8; border: 1px solid #262c36; border-radius: 12px; font: .84rem/1.65 var(--mono); padding: 1rem 1.1rem 1.1rem; box-shadow: 0 18px 50px -24px rgba(20, 30, 70, .55); overflow-x: auto; }
+.term .bar { display: flex; gap: .35rem; margin-bottom: .8rem; }
+.term .bar i { width: .65rem; height: .65rem; border-radius: 50%; background: #2d3440; display: block; }
+.term .c { color: #7d8797; } .term .g { color: #5fd3a6; } .term .b { color: #8cb0ff; } .term .y { color: #e8c170; } .term .r { color: #ff8b82; }
+.term pre { margin: 0; white-space: pre; }
+
+.three { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); margin-top: 3.2rem; }
+.three div { border-top: 3px solid var(--accent); padding-top: .8rem; }
+.three p { color: var(--muted); margin: 0; font-size: .96rem; }
+
+.figure { margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 1.2rem; }
+.figure.wide { margin-top: 2rem; }
+.figure svg, .figure img { display: block; width: 100%; height: auto; }
+.figure h3 { margin-bottom: .6rem; }
+.figure figcaption { color: var(--muted); font-size: .88rem; margin-top: .8rem; }
+.two { display: grid; gap: 1rem; grid-template-columns: 1fr; margin-top: 2rem; }
+@media (min-width: 52rem) { .two { grid-template-columns: 1fr 1fr; } }
+svg .t { fill: var(--fg); font: 600 13px var(--font); } svg .s { fill: var(--muted); font: 12px var(--font); }
+svg .box { fill: var(--surface); stroke: var(--line); stroke-width: 1.4; } svg .hot { fill: var(--soft); stroke: var(--accent); stroke-width: 2; }
+svg .ar { stroke: var(--muted); stroke-width: 1.5; fill: none; } svg .dash { stroke-dasharray: 5 4; }
+svg .dot { fill: var(--accent); } svg .axis { stroke: var(--line); stroke-width: 2; }
+svg .bar1 { fill: var(--accent); } svg .bar2 { fill: var(--line); }
+
+.grid { display: grid; gap: 1px; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); background: var(--line); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; margin-top: 2rem; }
+.grid div { background: var(--surface); padding: 1.1rem 1.2rem; }
+.grid p { color: var(--muted); font-size: .93rem; margin: 0; }
+
+.stats { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); margin: 2rem 0 0; }
+.stats div { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 1rem 1.1rem; }
+.stats b { display: block; font: 700 1.9rem/1.1 var(--font); letter-spacing: -.03em; }
+.stats span { color: var(--muted); font-size: .88rem; }
+.note { color: var(--muted); font-size: .88rem; margin-top: .9rem; }
+
+pre.code { background: var(--soft); border: 1px solid var(--line); border-radius: 12px; padding: 1rem 1.1rem; font: .86rem/1.65 var(--mono); overflow-x: auto; margin: 1.4rem 0 0; }
+.status { margin-top: 4.5rem; background: var(--warn-bg); border: 1px solid var(--warn-line); border-radius: 14px; padding: 1.3rem 1.5rem; }
+.status h2 { font-size: 1.2rem; letter-spacing: -.01em; }
+.status ul { margin: .4rem 0 0; padding-left: 1.2rem; color: var(--muted); }
+footer { margin-top: 4rem; border-top: 1px solid var(--line); padding: 1.6rem 0 2.6rem; color: var(--muted); font-size: .9rem; }
+footer .wrap { display: flex; flex-wrap: wrap; gap: .5rem 1.6rem; }
+table.fit { width: 100%; border-collapse: collapse; margin-top: 2rem; font-size: .95rem; }
+table.fit th, table.fit td { text-align: left; padding: .8rem .9rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.fit thead th { color: var(--muted); font-weight: 600; font-size: .85rem; }
+table.fit tbody th { font-weight: 650; }
+table.fit td { color: var(--muted); }
+table.fit tr.us { background: var(--soft); } table.fit tr.us td, table.fit tr.us th { color: var(--fg); }
+@media (max-width: 44rem) { .fitwrap { overflow-x: auto; } table.fit.wide { min-width: 38rem; } }
+.cols { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); margin-top: 1.4rem; }
+.cols > div { border: 1px solid var(--line); border-radius: 14px; padding: 1.1rem 1.3rem; background: var(--surface); }
+.cols ul { margin: .4rem 0 0; padding-left: 1.1rem; color: var(--muted); } .cols li { margin: .25rem 0; }
+.cols .no h3 { color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+.logo { display: block; width: 11rem; height: auto; border-radius: 14px; background: #fff; padding: .35rem; border: 1px solid var(--line); margin-bottom: 1.4rem; }
+header.top img.mark { width: 1.9rem; height: 1.9rem; display: block; }
+header.top .brand { display: inline-flex; align-items: center; gap: .55rem; }
+table.fit.num td, table.fit.num th { white-space: nowrap; } table.fit.num td.n { text-align: right; font-variant-numeric: tabular-nums; }
+.good { color: var(--good); } .bad { color: var(--bad); }
+.two { align-items: start; }
+table.fit.wide tbody th { white-space: nowrap; }
+pre code { padding: 0; background: none; }
+nav a[aria-current] { color: var(--fg); font-weight: 650; }
+table.fit.num thead th + th { text-align: right; }
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="top"><div class="wrap">
+  <a class="brand" href="index.html"><img class="mark" src="mark.png" alt="" width="30" height="30">cancho-web</a>
+  <nav aria-label="Sections">
+    <a href="index.html" class="opt">Overview</a><a href="examples.html" aria-current="page">Examples</a><a href="evidence.html" class="opt">Evidence</a><a href="index.html#numbers" class="opt">Numbers</a><a href="examples.html#run">Run it</a>
+    <a href="https://github.com/alpibrusl/cancho-web" class="opt">GitHub</a>
+  </nav>
+</div></header>
+
+<main id="main" class="wrap">
+
+<section id="top" style="padding-top:3rem">
+  <h1 style="font-size:clamp(2rem,5vw,3rem)">Examples</h1>
+  <p class="lead">Three runnable services, all held to their own OpenAPI document by the end-to-end tests: <code>examples/users</code> (a CRUD JSON API in memory), <code>examples/users_pg</code> (the same API on PostgreSQL) and <code>examples/users_threads</code> (the same loop in two threads of one process). Every response below is real output of the built service.</p>
+  <p class="note">There is no prebuilt binary yet: the service is built from source against a pinned compiler.</p>
+</section>
+
+<section id="run">
+  <h2>Run it, once</h2>
+  <p class="sub">The compiler and the two packages are checked out at the revisions CI builds and tests with, read from <code>ci.yml</code> so this text cannot drift from it. The packages are fetched and verified against <code>deps/*.lock</code> by hash every time, never taken from a copy checked in here.</p>
+  <pre class="code" tabindex="0"><code>git clone https://github.com/alpibrusl/cancho
+git clone https://github.com/alpibrusl/cancho-schema
+git clone https://github.com/alpibrusl/cancho-web &amp;&amp; cd cancho-web
+pin() { sed -n "s/^ *$1: *//p" .github/workflows/ci.yml; }
+(cd ../cancho &amp;&amp; git checkout "$(pin CANCHO_REV)" &amp;&amp; cargo build --release -p cancho)
+(cd ../cancho-schema &amp;&amp; git checkout "$(pin SCHEMA_REV)")
+export CANCHO=$PWD/../cancho/target/release/cancho
+
+scripts/build.sh examples/users/users.cho build/users
+build/users 8080 &amp;</code></pre>
+  <p class="note">To run the tests too: <code>pip install jsonschema openapi-spec-validator schemathesis</code>, then <code>python3 tests/e2e.py</code> (27 tests, Schemathesis included, about 25 s) and <code>benches/check.sh</code>.</p>
+</section>
+
+<section id="create">
+  <h2>1. Create, and what comes back</h2>
+  <p class="sub">A valid body: <code>201</code>, a <code>Location</code>, the stored user.</p>
+  <pre class="code" tabindex="0"><code>$ curl -i -XPOST -H 'Content-Type: application/json' \
+       -d '{"name":"Ada Lovelace","email":"ada@example.org","age":36,"role":"admin","tags":["math","code"]}' \
+       localhost:8080/users
+HTTP/1.1 201 Created
+Content-Type: application/json
+Content-Length: 103
+Connection: keep-alive
+Location: /users/1
+
+{"id":1,"name":"Ada Lovelace","email":"ada@example.org","age":36,"role":"admin","tags":["math","code"]}</code></pre>
+</section>
+
+<section id="refuse">
+  <h2>2. A body that breaks the rules gets every error</h2>
+  <p class="sub">Not the first: all of them, each with where it is, as RFC 9457 <code>application/problem+json</code>. An unknown key is refused too, at its own pointer.</p>
+  <pre class="code" tabindex="0"><code>$ curl -i -XPOST -H 'Content-Type: application/json' -d '{"name":"","age":151,"role":"root","nope":1}' localhost:8080/users
+HTTP/1.1 422 Unprocessable Content
+Content-Type: application/problem+json
+Content-Length: 369
+
+{"type":"about:blank","title":"Unprocessable Content","status":422,"count":4,"errors":[{"pointer":"/name","code":"min_length","detail":"is too short"},{"pointer":"/age","code":"maximum","detail":"is above the maximum"},{"pointer":"/role","code":"choice","detail":"is not one of the allowed values"},{"pointer":"/nope","code":"unknown","detail":"is not a known field"}]}</code></pre>
+  <div class="fitwrap"><table class="fit">
+    <thead><tr><th>Request</th><th>Answer</th></tr></thead>
+    <tbody>
+      <tr><th>Malformed JSON</th><td><code>400</code>, saying what failed and at which byte</td></tr>
+      <tr><th>Another content type</th><td><code>415</code></td></tr>
+      <tr><th>A body that breaks the schema</th><td><code>422</code>, every error, as above</td></tr>
+      <tr><th>An id that is not a positive integer</th><td><code>422</code></td></tr>
+      <tr><th>No such user</th><td><code>404</code> as <code>problem+json</code></td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="read">
+  <h2>3. Read, page, delete</h2>
+  <pre class="code" tabindex="0"><code>$ curl 'localhost:8080/users?limit=1&amp;offset=1'
+{"total":2,"items":[{"id":2,"name":"Grace"}]}
+
+$ curl -i -XDELETE localhost:8080/users/2
+HTTP/1.1 204 No Content
+Connection: keep-alive
+
+$ curl -i localhost:8080/users/2
+HTTP/1.1 404 Not Found
+Content-Type: application/problem+json
+
+{"type":"about:blank","title":"Not Found","status":404,"detail":"no such user"}
+
+$ curl -i 'localhost:8080/users?limit=0'
+HTTP/1.1 422 Unprocessable Content
+
+{"type":"about:blank","title":"Unprocessable Content","status":422,"detail":"limit must be an integer from 1 to 100"}</code></pre>
+  <p class="note">The <code>204</code> has no body and neither <code>Content-Length</code> nor <code>Content-Type</code>. An unknown query key is a <code>422</code> as well: a client that misspells <code>limit</code> should be told.</p>
+  <div class="fitwrap"><table class="fit">
+    <thead><tr><th>Route</th><th>What it does</th></tr></thead>
+    <tbody>
+      <tr><th><code>GET /health</code></th><td><code>{"ok":true}</code></td></tr>
+      <tr><th><code>GET /users?limit=&amp;offset=</code></th><td>a page (<code>limit</code> 1..100, default 20)</td></tr>
+      <tr><th><code>POST /users</code></th><td>create</td></tr>
+      <tr><th><code>GET /users/:id</code>, <code>DELETE /users/:id</code></th><td>the user / <code>204</code></td></tr>
+      <tr><th><code>GET /openapi.json</code></th><td>the contract (OpenAPI 3.1: <code>NewUser</code>, <code>User</code>, <code>Page</code>, <code>Problem</code>)</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">Storage is in memory, up to 100,000 users or 64 MiB (past that a <code>POST</code> is a 503); a delete leaves a hole, ids are not reused.</p>
+</section>
+
+<section id="contract">
+  <h2>4. The contract is a file</h2>
+  <p class="sub">The document is generated from the same declaration that makes the router and the same schema nodes the validator runs, and it is checked in as <a href="https://github.com/alpibrusl/cancho-web/blob/main/examples/users/openapi.json"><code>examples/users/openapi.json</code></a>. An end-to-end test compares what the service serves with that file byte for byte, so a change to the API is a change to a file in review.</p>
+  <pre class="code" tabindex="0"><code>$ curl -s localhost:8080/openapi.json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["openapi"], sorted(d["paths"]))'
+3.1.0 ['/health', '/users', '/users/{id}']</code></pre>
+  <p class="sub" style="margin-top:1.2rem">Who may call an operation is declared the same way, and only the document is affected (the application&rsquo;s own gate still decides): <code>web.bearer_scheme</code>, then <code>web.require</code> once for each token that will do, <code>web.no_auth</code> for an open route. <code>web.requirements</code>, <code>web.requirement</code> and <code>web.is_open</code> read it back, so a gate need not keep a second table.</p>
+</section>
+
+<section id="postgres">
+  <h2>5. The same API on PostgreSQL</h2>
+  <p class="sub"><code>examples/users_pg</code> is this service with a table behind it: the same routes, the same schema nodes, the same OpenAPI document (plus a <code>pattern</code> on <code>name</code> and <code>email</code>, which refuse U+0000 because PostgreSQL text cannot hold it) and the same end-to-end suite, Schemathesis included. It reaches the database through functions that <code>pgen</code> (in <a href="https://github.com/alpibrusl/cancho-pg">cancho-pg</a>) wrote from <code>queries.sql</code> by asking the server what each statement&rsquo;s parameters and columns are.</p>
+  <pre class="code" tabindex="0"><code>createdb users_pg &amp;&amp; psql users_pg -f examples/users_pg/schema.sql
+scripts/build.sh examples/users_pg/users_pg.cho build/users_pg
+build/users_pg 8080 127.0.0.1 5432 postgres users_pg -         # &lt;port&gt; &lt;db host&gt; &lt;db port&gt; &lt;db user&gt; &lt;db&gt; &lt;password|-&gt;
+
+# a pool of connections: a request that needs the database is held, its query is queued, the loop goes on
+build/users_pg 8080 127.0.0.1 5432 postgres users_pg - - 4     # ... &lt;password|-&gt; &lt;reuseport|-&gt; &lt;connections&gt;</code></pre>
+  <p class="note">By default it holds one connection and each request that needs the database blocks the loop for a round trip. Measured (<a href="evidence.html#postgres">evidence</a>): a read is 14,976 requests a second, 5.1&times; lean FastAPI with asyncpg and 13.9&times; FastAPI with SQLAlchemy. With a pool, <code>GET /health</code> stays under a millisecond while a query waits a second on a lock (the blocking service: 645 ms).</p>
+</section>
+
+<section id="not">
+  <h2>What these cases do not cover yet</h2>
+  <div class="cols">
+    <div class="no"><h3>Not built</h3><ul><li>Dispatch, and parameters validated before the handler runs (the handler still checks <code>limit</code> and <code>id</code>)</li><li>Middleware, authentication, dependency injection</li><li>TLS, streaming bodies</li></ul></div>
+    <div class="no"><h3>Not shown here</h3><ul><li>More than one core in one process beyond the two-thread example</li><li>A service that is not the users API: <a href="https://github.com/alpibrusl/cancho-hooks">cancho-hooks</a> declares its API with <code>web</code> (<code>src/api.cho</code>), and its router and document are made from that declaration</li></ul></div>
+  </div>
+</section>
+
+</main>
+
+<footer><div class="wrap">
+  <a href="https://github.com/alpibrusl/cancho-web">Repository</a><a href="evidence.html">Evidence</a><a href="examples.html">Examples</a>
+  <a href="https://github.com/alpibrusl/cancho-web/blob/main/docs/design.md">Design</a><a href="https://github.com/alpibrusl/cancho-web/blob/main/docs/benchmarks.md">Benchmarks</a>
+  <a href="https://github.com/alpibrusl/cancho-schema">cancho-schema</a><a href="https://github.com/alpibrusl/cancho">cancho</a>
+  <span>Alpha · EUPL-1.2</span>
+</div></footer>
+</body>
+</html>

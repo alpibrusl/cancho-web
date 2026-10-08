@@ -1,0 +1,21 @@
+# cancho-web
+
+> A web layer for cancho, a typed systems language: each operation (route, parameters, body, responses) is declared once, and the router and an OpenAPI 3.1 document are made from that declaration. Request bodies are validated by cancho-schema, every error at once, as RFC 9457 problem+json. One thread, no Ffi, no C. Alpha: the declaration half is built; dispatch, middleware, authentication, dependency injection and TLS are not.
+
+## Read first
+- [Overview](https://alpibrusl.github.io/cancho-web/): what it is, where it fits, the numbers.
+- [Examples](https://alpibrusl.github.io/cancho-web/examples.html): the users API run, with the answers it gives and the document it serves.
+- [Evidence](https://alpibrusl.github.io/cancho-web/evidence.html): what the tests cover, what building it found, how each benchmark number was measured, what is not claimed.
+- [Design](https://github.com/alpibrusl/cancho-web/blob/main/docs/design.md): what the framework layer is, what building the example found, and what is next.
+- [Benchmarks](https://github.com/alpibrusl/cancho-web/blob/main/docs/benchmarks.md): the method and the tables, against FastAPI, Go and a hand-written C server, and on PostgreSQL.
+
+## Facts that matter when using it
+- The application keeps its own loop (`server.wait`, `server.next`, `server.respond`) and matches on the route id `web.find` returns; a framework that owned the loop would need handlers to be handed a view of buffers they cannot name a region for, which does not type-check in cancho today.
+- `web.operation` registers a route and answers its id; `path_param`, `query_param`, `header_param`, `body`, `respond`, `respond_problem` declare the rest. The same declaration writes the OpenAPI document (`web.openapi`), which is checked in as `examples/users/openapi.json`.
+- Parameters are documented but not yet validated for the handler: a path or query parameter that fails its schema is still a check the handler makes.
+- Bodies: `cancho-schema` returns every error with a JSON Pointer; no coercion (`"3"` is not an integer; `150.0` is). Errors are `application/problem+json`.
+- Who may call an operation (`bearer_scheme`, `require`, `no_auth`) is written to the document and can be read back (`requirements`, `requirement`, `is_open`). Nothing checks a token.
+- Benchmarks are one VM, one run, one core each: 15-26x FastAPI, 1.1-1.6x Go net/http, level with a hand-written C server on a read and 12-33% behind it on the rest.
+
+## Not built
+Dispatch and parameter validation by construction, middleware, authentication, dependency injection, TLS, streaming bodies, more than one core in one process.

@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cancho-web: evidence</title>
+<meta name="description" content="What the cancho-web tests cover, what building it found, how each benchmark number was measured against FastAPI, Go and C, and what is not claimed.">
+<meta property="og:title" content="cancho-web: evidence">
+<meta property="og:description" content="The tests, the contract check, the benchmarks and what they found. What is claimed, and what is not.">
+<meta name="color-scheme" content="light dark">
+<meta property="og:type" content="website">
+<meta property="og:image" content="https://alpibrusl.github.io/cancho-web/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="cancho-web evidence: tests held to the served OpenAPI document, and benchmarks against FastAPI, Go and C.">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="icon" type="image/png" sizes="64x64" href="favicon.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta property="og:url" content="https://alpibrusl.github.io/cancho-web/evidence.html">
+<style>
+
+:root {
+  --bg: #fbfbfc; --fg: #14171c; --muted: #566170; --line: #e1e4ea; --surface: #ffffff; --soft: #f0f3f6;
+  --accent: #265e8d; --accent-fg: #ffffff; --good: #0f7b5f; --warn: #92400e; --warn-bg: #fdf6e7; --warn-line: #e0b765; --bad: #d1362f;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0d1217; --fg: #e8eaee; --muted: #9ba5b3; --line: #232932; --surface: #141a21; --soft: #182029;
+    --accent: #6fa3d6; --accent-fg: #0a1522; --good: #4fd1a5; --warn: #f3c77a; --warn-bg: #1d1a12; --warn-line: #8a6a2a; --bad: #ff6b63; }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; scroll-padding-top: 4rem; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 1rem/1.6 var(--font); }
+a { color: var(--accent); text-underline-offset: .15em; }
+.wrap { width: 100%; max-width: 68rem; margin: 0 auto; padding: 0 20px; }
+.skip { position: absolute; left: 16px; top: -4rem; background: var(--accent); color: var(--accent-fg); padding: .5rem .8rem; border-radius: 6px; z-index: 9; }
+.skip:focus { top: 8px; }
+a:focus-visible, .btn:focus-visible, pre:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+header.top { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+header.top .wrap { display: flex; align-items: center; gap: 1.5rem; height: 3.4rem; }
+.brand { font: 700 1rem var(--mono); color: var(--fg); text-decoration: none; letter-spacing: -.01em; white-space: nowrap; }
+nav { display: flex; gap: 1.2rem; margin-left: auto; }
+nav a { color: var(--muted); text-decoration: none; font-size: .93rem; white-space: nowrap; }
+nav a:hover { color: var(--fg); }
+@media (max-width: 40rem) { nav a.opt { display: none; } }
+
+h1 { font-size: clamp(2.3rem, 6.2vw, 4rem); line-height: 1.04; letter-spacing: -.035em; margin: 0 0 1rem; font-weight: 750; }
+h2 { font-size: clamp(1.6rem, 3.4vw, 2.2rem); line-height: 1.15; letter-spacing: -.025em; margin: 0 0 .5rem; font-weight: 700; }
+h3 { font-size: 1.05rem; margin: 0 0 .25rem; }
+p { margin: 0 0 1rem; }
+section { padding: 4.5rem 0 0; }
+.lead { font-size: 1.2rem; color: var(--muted); max-width: 34rem; }
+.sub { color: var(--muted); max-width: 38rem; }
+code { font-family: var(--mono); font-size: .9em; background: var(--soft); padding: .1em .35em; border-radius: 5px; }
+
+.hero { padding: 4rem 0 0; display: grid; gap: 2.5rem; align-items: center; }
+@media (min-width: 58rem) { .hero { grid-template-columns: 1.05fr 1fr; } }
+.badge { display: inline-flex; gap: .5rem; align-items: center; font-size: .82rem; color: var(--warn); background: var(--warn-bg); border: 1px solid var(--warn-line); padding: .22rem .7rem; border-radius: 999px; margin-bottom: 1.2rem; text-decoration: none; }
+.badge i { width: .5rem; height: .5rem; border-radius: 50%; background: var(--warn-line); display: inline-block; }
+.cta { display: flex; flex-wrap: wrap; gap: .7rem; margin-top: 1.6rem; }
+.btn { display: inline-block; padding: .65rem 1.15rem; border-radius: 8px; font-weight: 600; text-decoration: none; border: 1px solid var(--accent); }
+.btn.primary { background: var(--accent); color: var(--accent-fg); }
+.btn.ghost { color: var(--accent); }
+.btn.ghost:hover { background: var(--soft); }
+
+.term { background: #0d1117; color: #d6dde8; border: 1px solid #262c36; border-radius: 12px; font: .84rem/1.65 var(--mono); padding: 1rem 1.1rem 1.1rem; box-shadow: 0 18px 50px -24px rgba(20, 30, 70, .55); overflow-x: auto; }
+.term .bar { display: flex; gap: .35rem; margin-bottom: .8rem; }
+.term .bar i { width: .65rem; height: .65rem; border-radius: 50%; background: #2d3440; display: block; }
+.term .c { color: #7d8797; } .term .g { color: #5fd3a6; } .term .b { color: #8cb0ff; } .term .y { color: #e8c170; } .term .r { color: #ff8b82; }
+.term pre { margin: 0; white-space: pre; }
+
+.three { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); margin-top: 3.2rem; }
+.three div { border-top: 3px solid var(--accent); padding-top: .8rem; }
+.three p { color: var(--muted); margin: 0; font-size: .96rem; }
+
+.figure { margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 1.2rem; }
+.figure.wide { margin-top: 2rem; }
+.figure svg, .figure img { display: block; width: 100%; height: auto; }
+.figure h3 { margin-bottom: .6rem; }
+.figure figcaption { color: var(--muted); font-size: .88rem; margin-top: .8rem; }
+.two { display: grid; gap: 1rem; grid-template-columns: 1fr; margin-top: 2rem; }
+@media (min-width: 52rem) { .two { grid-template-columns: 1fr 1fr; } }
+svg .t { fill: var(--fg); font: 600 13px var(--font); } svg .s { fill: var(--muted); font: 12px var(--font); }
+svg .box { fill: var(--surface); stroke: var(--line); stroke-width: 1.4; } svg .hot { fill: var(--soft); stroke: var(--accent); stroke-width: 2; }
+svg .ar { stroke: var(--muted); stroke-width: 1.5; fill: none; } svg .dash { stroke-dasharray: 5 4; }
+svg .dot { fill: var(--accent); } svg .axis { stroke: var(--line); stroke-width: 2; }
+svg .bar1 { fill: var(--accent); } svg .bar2 { fill: var(--line); }
+
+.grid { display: grid; gap: 1px; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); background: var(--line); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; margin-top: 2rem; }
+.grid div { background: var(--surface); padding: 1.1rem 1.2rem; }
+.grid p { color: var(--muted); font-size: .93rem; margin: 0; }
+
+.stats { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); margin: 2rem 0 0; }
+.stats div { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 1rem 1.1rem; }
+.stats b { display: block; font: 700 1.9rem/1.1 var(--font); letter-spacing: -.03em; }
+.stats span { color: var(--muted); font-size: .88rem; }
+.note { color: var(--muted); font-size: .88rem; margin-top: .9rem; }
+
+pre.code { background: var(--soft); border: 1px solid var(--line); border-radius: 12px; padding: 1rem 1.1rem; font: .86rem/1.65 var(--mono); overflow-x: auto; margin: 1.4rem 0 0; }
+.status { margin-top: 4.5rem; background: var(--warn-bg); border: 1px solid var(--warn-line); border-radius: 14px; padding: 1.3rem 1.5rem; }
+.status h2 { font-size: 1.2rem; letter-spacing: -.01em; }
+.status ul { margin: .4rem 0 0; padding-left: 1.2rem; color: var(--muted); }
+footer { margin-top: 4rem; border-top: 1px solid var(--line); padding: 1.6rem 0 2.6rem; color: var(--muted); font-size: .9rem; }
+footer .wrap { display: flex; flex-wrap: wrap; gap: .5rem 1.6rem; }
+table.fit { width: 100%; border-collapse: collapse; margin-top: 2rem; font-size: .95rem; }
+table.fit th, table.fit td { text-align: left; padding: .8rem .9rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.fit thead th { color: var(--muted); font-weight: 600; font-size: .85rem; }
+table.fit tbody th { font-weight: 650; }
+table.fit td { color: var(--muted); }
+table.fit tr.us { background: var(--soft); } table.fit tr.us td, table.fit tr.us th { color: var(--fg); }
+@media (max-width: 44rem) { .fitwrap { overflow-x: auto; } table.fit.wide { min-width: 38rem; } }
+.cols { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); margin-top: 1.4rem; }
+.cols > div { border: 1px solid var(--line); border-radius: 14px; padding: 1.1rem 1.3rem; background: var(--surface); }
+.cols ul { margin: .4rem 0 0; padding-left: 1.1rem; color: var(--muted); } .cols li { margin: .25rem 0; }
+.cols .no h3 { color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+.logo { display: block; width: 11rem; height: auto; border-radius: 14px; background: #fff; padding: .35rem; border: 1px solid var(--line); margin-bottom: 1.4rem; }
+header.top img.mark { width: 1.9rem; height: 1.9rem; display: block; }
+header.top .brand { display: inline-flex; align-items: center; gap: .55rem; }
+table.fit.num td, table.fit.num th { white-space: nowrap; } table.fit.num td.n { text-align: right; font-variant-numeric: tabular-nums; }
+.good { color: var(--good); } .bad { color: var(--bad); }
+.two { align-items: start; }
+table.fit.wide tbody th { white-space: nowrap; }
+pre code { padding: 0; background: none; }
+nav a[aria-current] { color: var(--fg); font-weight: 650; }
+table.fit.num thead th + th { text-align: right; }
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="top"><div class="wrap">
+  <a class="brand" href="index.html"><img class="mark" src="mark.png" alt="" width="30" height="30">cancho-web</a>
+  <nav aria-label="Sections">
+    <a href="index.html" class="opt">Overview</a><a href="examples.html">Examples</a><a href="evidence.html" aria-current="page" class="opt">Evidence</a><a href="index.html#numbers" class="opt">Numbers</a><a href="examples.html#run">Run it</a>
+    <a href="https://github.com/alpibrusl/cancho-web" class="opt">GitHub</a>
+  </nav>
+</div></header>
+
+<main id="main" class="wrap">
+
+<section id="top" style="padding-top:3rem">
+  <h1 style="font-size:clamp(2rem,5vw,3rem)">Evidence</h1>
+  <p class="lead">What the tests cover, what building it found, how each number was measured, and what is not claimed. The long forms are <a href="https://github.com/alpibrusl/cancho-web/blob/main/docs/design.md">docs/design.md</a> and <a href="https://github.com/alpibrusl/cancho-web/blob/main/docs/benchmarks.md">docs/benchmarks.md</a>; this page repeats their numbers and nothing else.</p>
+</section>
+
+<section id="claims">
+  <h2>What is claimed, and what is not</h2>
+  <div class="cols">
+    <div><h3>Claimed, and measured</h3><ul>
+      <li>Every response any end-to-end test sees is one the served OpenAPI document declares, with a body that validates against the schema it declares.</li>
+      <li>The served document validates as OpenAPI 3.1 and is byte for byte the checked-in <code>openapi.json</code>.</li>
+      <li>Schemathesis, generating positive and negative requests and stateful scenarios from that document, found no failure in 8,447 cases (the last 500-example run).</li>
+      <li>On one core, 15&ndash;26&times; FastAPI and 1.1&ndash;1.6&times; Go <code>net/http</code>, with the same work checked first.</li>
+    </ul></div>
+    <div class="no"><h3>Not claimed</h3><ul>
+      <li>That it beats C: it is level on a read and 12&ndash;33% behind on the other three.</li>
+      <li>Anything about several cores, TLS, a real handler&rsquo;s work, memory or start-up time: none was measured.</li>
+      <li>That the absolute figures hold on another machine. One 4-vCPU VM, one run; repeats differ by about 5%, and a create by up to 10%.</li>
+      <li>That responses are enforced: they are documented, and checked from outside.</li>
+    </ul></div>
+  </div>
+</section>
+
+<section id="tests">
+  <h2>The tests</h2>
+  <p class="sub"><code>python3 tests/e2e.py</code> builds the service, starts it, and talks to it over real sockets with a real HTTP client. CI runs it for each of the three services (in memory, PostgreSQL, PostgreSQL with a pool), with the same suite.</p>
+  <div class="fitwrap"><table class="fit">
+    <thead><tr><th>What</th><th>How</th></tr></thead>
+    <tbody>
+      <tr><th>The contract</th><td>Every response any test sees must be one the document declares, with a body that validates against its schema.</td></tr>
+      <tr><th>The document</th><td>It validates as OpenAPI 3.1 (<code>openapi-spec-validator</code>) and equals <code>examples/users/openapi.json</code> byte for byte. The test fails when a declaration changes; that was checked by changing one description.</td></tr>
+      <tr><th>Schemathesis</th><td>Generates requests from the document, positive and negative cases and stateful scenarios, and checks what comes back. 8,447 cases in the last 500-example run (<code>EXAMPLES=500</code>), none failing.</td></tr>
+      <tr><th>The wire</th><td>Pipelining, keep-alive, 8 concurrent clients, an oversized body, and two pipelined <code>204</code>s and a <code>200</code> staying framed.</td></tr>
+      <tr><th>Validation edges</th><td>Every error at once with its pointer, no coercion, <code>150.0</code> as an integer, string length in code points.</td></tr>
+      <tr><th>Unit tests of <code>web</code></th><td>Documents derived by hand, compared byte for byte, for a minimal API, shared path parameters with <code>$ref</code>s and the problem response, query/body/header/hidden routes with the routing the declaration also made, security alternatives, header parameters and words.</td></tr>
+      <tr><th>The comparison servers</th><td><code>benches/check.sh</code>: the Go and C implementations still do the same work as the service. <code>benches/equivalent.py</code> sends the same 16 requests to every implementation and refuses to time anything unless every status and every successful body agrees; <code>benches/edges.py</code> adds 84 more.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="bench">
+  <h2>The benchmark</h2>
+  <p class="sub">Each server runs alone on core 0; the load generator (<code>benches/kload.c</code>, two threads of 16 keep-alive connections, closed loop) runs on cores 2 and 3. Five seconds of load, three times, median; &ldquo;create&rdquo; is a fixed 30,000 requests from a fresh process, because it adds state. One 4-vCPU VM (Intel Xeon 2.1 GHz, Linux 6.18, Python 3.11, FastAPI 0.142, uvicorn 0.54, Go 1.24). <code>benches/run.sh</code> reproduces it.</p>
+  <h3 id="fastapi" style="margin-top:2rem">Against FastAPI, three ways</h3>
+<div class="fitwrap"><table class="fit num">
+<thead><tr><th></th><th>GET one user</th><th>GET a page of 20</th><th>POST, invalid (422)</th><th>POST, create</th></tr></thead>
+<tbody>
+<tr class="us"><th>cancho-web (users)</th><td class="n">128,972</td><td class="n">70,768</td><td class="n">94,659</td><td class="n">64,327</td></tr>
+<tr><th>FastAPI, uvicorn (asyncio)</th><td class="n">4,828</td><td class="n">4,028</td><td class="n">3,545</td><td class="n">4,091</td></tr>
+<tr><th>FastAPI, uvloop + httptools</th><td class="n">4,851</td><td class="n">4,208</td><td class="n">3,456</td><td class="n">4,129</td></tr>
+<tr><th>FastAPI lean, uvloop + httptools</th><td class="n">5,216</td><td class="n">4,604</td><td class="n">3,606</td><td class="n">4,163</td></tr>
+</tbody></table></div>
+  <p class="note">About 25&times; on a read, 15&times; on a page, 26&times; on a rejected body and 15&times; on a create, against the best FastAPI figure in each column. uvloop and httptools change almost nothing: FastAPI is CPU-bound in Python, in routing, dependency resolution and pydantic, not in its server. The lean variant, whose handlers return stored bytes instead of going through a <code>response_model</code>, gains about 10%. Create is the noisiest column: identical binaries span 65,000&ndash;79,000 across runs.</p>
+  <h3 style="margin-top:2rem">Against Go and a hand-written C server</h3>
+  <p class="sub">FastAPI is a weak yardstick for speed. Go uses the standard library only (<code>net/http</code>, <code>encoding/json</code> into a struct, hand-written range checks, a mutex around the store, one core visible). The C floor is one thread, one epoll loop and a parser that knows four routes, validating and writing the stored answer in one pass: a hand-written baseline, not a proven minimum. The C ceiling answers every read with the same canned reply, and is the most one core can do over loopback TCP.</p>
+<div class="fitwrap"><table class="fit num">
+<thead><tr><th></th><th>GET one user</th><th>GET a page of 20</th><th>POST, invalid (422)</th><th>POST, create</th></tr></thead>
+<tbody>
+<tr><th>C ceiling (a canned reply)</th><td class="n">137,180</td><td class="n">&ndash;</td><td class="n">&ndash;</td><td class="n">&ndash;</td></tr>
+<tr><th>hand-written C (epoll)</th><td class="n">117,958</td><td class="n">105,523</td><td class="n">107,680</td><td class="n">91,783</td></tr>
+<tr class="us"><th>cancho-web (users)</th><td class="n">128,972</td><td class="n">70,768</td><td class="n">94,659</td><td class="n">64,327</td></tr>
+<tr><th>Go <code>net/http</code></th><td class="n">79,772</td><td class="n">65,654</td><td class="n">60,278</td><td class="n">53,580</td></tr>
+<tr><th>FastAPI, best of three</th><td class="n">5,216</td><td class="n">4,604</td><td class="n">3,606</td><td class="n">4,163</td></tr>
+</tbody></table></div><div class="fitwrap"><table class="fit num">
+<thead><tr><th>cancho-web against</th><th>GET one</th><th>page</th><th>invalid</th><th>create</th></tr></thead>
+<tbody>
+<tr><th>Go</th><td class="n">1.6&times;</td><td class="n">1.08&times;</td><td class="n">1.6&times;</td><td class="n">1.2&times;</td></tr>
+<tr><th>hand-written C</th><td class="n">1.09&times; (a tie)</td><td class="n">0.67&times;</td><td class="n">0.88&times;</td><td class="n">0.70&times;</td></tr>
+<tr><th>C ceiling</th><td class="n">0.94&times;</td><td class="n"></td><td class="n"></td><td class="n"></td></tr>
+</tbody></table></div><div class="fitwrap"><table class="fit num">
+<thead><tr><th>GET one user, 32 in flight (µs)</th><th>p50</th><th>p90</th><th>p99</th><th>p99.9</th><th>max</th></tr></thead>
+<tbody>
+<tr><th>C ceiling</th><td class="n">137</td><td class="n">222</td><td class="n">404</td><td class="n">1,513</td><td class="n">35,118</td></tr>
+<tr class="us"><th>cancho-web (users)</th><td class="n">156</td><td class="n">270</td><td class="n">442</td><td class="n">1,140</td><td class="n">16,995</td></tr>
+<tr><th>hand-written C</th><td class="n">178</td><td class="n">269</td><td class="n">433</td><td class="n">1,158</td><td class="n">19,645</td></tr>
+<tr><th>Go <code>net/http</code></th><td class="n">325</td><td class="n">483</td><td class="n">850</td><td class="n">1,770</td><td class="n">6,937</td></tr>
+<tr><th>FastAPI, uvicorn</th><td class="n">5,161</td><td class="n">8,318</td><td class="n">11,842</td><td class="n">14,805</td><td class="n">17,341</td></tr>
+</tbody></table></div>
+  <figure class="figure wide"><img src="figures/bench.svg" width="700" height="518" alt="Requests per second on one core in four cells, fastest first." ><figcaption>The first table above as a picture, drawn by <code>scripts/figures.py</code> from the table in the README.</figcaption></figure>
+  <div class="cols">
+    <div><h3>What it says</h3><ul>
+      <li>On a read it is where a hand-written C server is, and at 94% of the kernel&rsquo;s limit: one core spends about 7 &micro;s a request in the socket path before any server code runs.</li>
+      <li>It is ahead of Go on every workload, with half the p99. That is Go&rsquo;s goroutine-per-connection runtime and GC on one core against a loop with neither; it says nothing about Go with several cores.</li>
+      <li>On a create or a rejected body it serves 12&ndash;30% fewer requests than the C floor, probably because it parses, validates and writes the answer in separate passes. That was not profiled.</li>
+    </ul></div>
+    <div class="no"><h3>Not measured</h3><ul>
+      <li>Go with more than one core, or with Gin or fasthttp; Rust; Node.</li>
+      <li>A second core for cancho (<code>reuseport</code> copies); TLS; a real handler&rsquo;s work; resident memory and start-up time.</li>
+      <li>FastAPI&rsquo;s usual deployment: several worker processes. This is one core against one core.</li>
+    </ul></div>
+  </div>
+</section>
+
+<section id="postgres">
+  <h2>On PostgreSQL</h2>
+  <p class="sub"><code>examples/users_pg</code> against the same API in FastAPI twice, because &ldquo;FastAPI with a database&rdquo; is not one number. Server on core 0, <strong>PostgreSQL 16 on core 1</strong> (default settings, <code>fsync</code> on), load generator on cores 2 and 3. A create is a fixed 20,000 requests against a fresh table.</p>
+<div class="fitwrap"><table class="fit num">
+<thead><tr><th>requests a second, median of 3</th><th>GET one user</th><th>GET a page of 20</th><th>POST, invalid (422)</th><th>POST, create</th></tr></thead>
+<tbody>
+<tr class="us"><th>cancho users_pg, prepared</th><td class="n">14,976</td><td class="n">4,496</td><td class="n">95,328</td><td class="n">4,404 (noisy)</td></tr>
+<tr><th>cancho users_pg, parsing every call</th><td class="n">9,788</td><td class="n">3,865</td><td class="n">90,902</td><td class="n">2,748 (noisy)</td></tr>
+<tr><th>FastAPI + asyncpg, lean</th><td class="n">2,918</td><td class="n">1,961</td><td class="n">3,337</td><td class="n">2,657</td></tr>
+<tr><th>FastAPI + SQLAlchemy + asyncpg</th><td class="n">1,078</td><td class="n">582</td><td class="n">3,238</td><td class="n">846</td></tr>
+</tbody></table></div>
+  <p class="note">A read is 53% faster than the build that parses every call (14,976 against 9,788), 5.1&times; lean FastAPI and 13.9&times; the SQLAlchemy one. <strong>A create: no conclusion.</strong> 4,404 against 2,748 looked like a 60% gain and was written up as one; ten runs of the same build span 2,155 to 4,245 a second, so 4,404 was the top of the noise. The write-up says so, and only the reads and pages are measured well enough to compare.</p>
+  <h3 id="pool" style="margin-top:2rem">A pool in one process</h3>
+  <p class="sub">With a pool of connections a request that needs the database is held, its query is queued, and the loop goes on. A query held behind a table lock for a second, with 100 <code>GET /health</code> meanwhile: the pool&rsquo;s median 0.14 ms and <strong>maximum 0.76 ms</strong>; the blocking service <strong>645 ms</strong>.</p>
+<div class="fitwrap"><table class="fit num">
+<thead><tr><th>users_pg, requests a second</th><th>GET one user</th><th>GET a page of 20</th><th>POST, create (median of 10; range)</th></tr></thead>
+<tbody>
+<tr><th>blocking, 1 copy</th><td class="n">15,638</td><td class="n">4,524</td><td class="n">2,317 (3 runs)</td></tr>
+<tr><th>blocking, 4 copies on core 0</th><td class="n"></td><td class="n"></td><td class="n">5,818 (4,528&ndash;8,329)</td></tr>
+<tr class="us"><th>pool, 1 connection</th><td class="n">63,980 / 65,894 / 64,262</td><td class="n">7,894&ndash;8,409</td><td class="n">3,818 (3,190&ndash;5,306)</td></tr>
+<tr><th>pool, 4 connections</th><td class="n">45,056</td><td class="n">7,420</td><td class="n">8,091 (6,836&ndash;10,776)</td></tr>
+</tbody></table></div>
+  <p class="note">More connections make reads slower (PostgreSQL&rsquo;s backends share its one core) and a write wants several. The pool&rsquo;s write median beats four copies&rsquo;, but the ranges overlap. It does not reconnect after a database restart (database routes answer 503 until the service is restarted) and has no per-request deadline.</p>
+</section>
+
+<section id="found">
+  <h2>What the tests found</h2>
+  <div class="cols">
+    <div><h3>In <code>cancho-schema</code></h3><ul>
+      <li><code>150.0</code> is an integer in JSON Schema, and string length counts code points. Both were decisions the schema&rsquo;s own tests agreed with, because the tests had been shaped to the decisions. Schemathesis disagreed on the first run.</li>
+    </ul></div>
+    <div><h3>In the example</h3><ul>
+      <li>An unknown query parameter has to be refused for the reason an unknown body field is.</li>
+      <li>The document must state the integer maximum the server enforces: a 17-digit limit that is true of the server and false of the contract is a defect in the contract.</li>
+      <li><code>json.to_int</code> on a float-spelled integer answered 0, which would have stored <code>"age": 0</code> silently.</li>
+    </ul></div>
+    <div><h3>In cancho</h3><ul>
+      <li><code>server.reply</code> hard-coded <code>Content-Type: application/json</code>; <code>problem+json</code> needed <code>reply_as</code>.</li>
+      <li><code>http.respond_head</code> always wrote <code>Content-Length</code>, so a correct <code>204</code> was impossible.</li>
+      <li><code>std.buffer.append</code> copied a byte at a time: 62,000 to 71,000 requests a second on the page endpoint.</li>
+    </ul></div>
+    <div><h3>In the benchmark</h3><ul>
+      <li>The load generator matched <code>Content-Length:</code> case-sensitively, and uvicorn sends it lowercase, so every answer&rsquo;s body was counted as the next response. The figures were plausible (about 5,000 a second) and wrong. It is caught now because the generator checks every status against the one expected. A benchmark that cannot fail is not a measurement.</li>
+      <li>The page endpoint was 0.62&times; of Go, for two reasons, both fixed: re-validating the program&rsquo;s own output, and the copy above.</li>
+      <li>The cross-checks disagreed with the references too: on a repeated key the service keeps the first, Go and pydantic the last; on a lone surrogate Go stores U+FFFD. Shown, not counted.</li>
+    </ul></div>
+  </div>
+</section>
+
+<section id="limits">
+  <h2>Not tested, not built</h2>
+  <div class="cols">
+    <div class="no"><h3>Not built</h3><ul>
+      <li>Dispatch, and parameters validated before the handler runs.</li>
+      <li>Middleware, authentication, dependency injection.</li>
+      <li>TLS, streaming bodies, more than one core in one process (two threads share nothing).</li>
+      <li><code>$ref</code>/<code>$defs</code> in the generated JSON Schema.</li>
+    </ul></div>
+    <div class="no"><h3>Not tested</h3><ul>
+      <li>A service with a real workload behind it. <code>cancho-hooks</code> uses <code>web</code> for its router and document; its behaviour is its own repository&rsquo;s evidence.</li>
+      <li>The Go and C servers leave out <code>/openapi.json</code>, and the C server chunked request bodies; none of it is on a benchmarked path.</li>
+    </ul></div>
+  </div>
+</section>
+
+</main>
+
+<footer><div class="wrap">
+  <a href="https://github.com/alpibrusl/cancho-web">Repository</a><a href="evidence.html">Evidence</a><a href="examples.html">Examples</a>
+  <a href="https://github.com/alpibrusl/cancho-web/blob/main/docs/design.md">Design</a><a href="https://github.com/alpibrusl/cancho-web/blob/main/docs/benchmarks.md">Benchmarks</a>
+  <a href="https://github.com/alpibrusl/cancho-schema">cancho-schema</a><a href="https://github.com/alpibrusl/cancho">cancho</a>
+  <span>Alpha · EUPL-1.2</span>
+</div></footer>
+</body>
+</html>

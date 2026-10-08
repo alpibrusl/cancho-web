@@ -150,6 +150,14 @@ jobs:
           SCHEMA_DIR: ${{ github.workspace }}/cancho-schema
         run: benches/check.sh
 
+      # The site (docs/*.html): its figure comes from the table in the README, and its links resolve. (Its images are derived from
+      # docs/logo.jpg by scripts/site_assets.py, which needs Pillow and is run by hand.)
+      - name: The site's figure is the README's table, and its links resolve
+        working-directory: web
+        run: |
+          python3 scripts/figures.py --check
+          python3 scripts/check_site.py
+
       - name: kload compiles
         working-directory: web
         run: cc -O2 -o /tmp/kload benches/kload.c -lpthread
