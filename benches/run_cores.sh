@@ -23,7 +23,7 @@ BAD='{"name":""}'
 declare -a NAMES CMDS CORES
 add() { NAMES+=("$1"); CORES+=("$2"); CMDS+=("$3"); }
 add "cancho, 1 process"                       0   "$here/build/users \$PORT"
-add "cancho, 2 processes (reuseport)"         0,1 "$here/build/users \$PORT reuseport"
+add "cancho, 2 processes (reuseport)"         0,1 "$here/build/users \$PORT reuseport & $here/build/users \$PORT reuseport & wait"
 add "cancho, 2 threads of 1 process"          0,1 "$here/build/users_threads \$PORT"
 add "Go net/http, 1 core"                     0   "$here/build/go_users \$PORT"
 add "Go net/http, 2 cores"                    0,1 "$here/build/go_users \$PORT"
@@ -33,12 +33,13 @@ add "FastAPI lean, 2 workers"                 0,1 "cd $here/benches/fastapi_user
 port=19700
 start() { # $1 = index; sets PID
   port=$((port + 1)); export PORT=$port
-  bash -c "taskset -c ${CORES[$1]} bash -c '${CMDS[$1]//\$PORT/$port}'" >/dev/null 2>&1 &
+  # Its own process group, so that `stop` ends every process it started (two copies, a master and its workers).
+  setsid bash -c "taskset -c ${CORES[$1]} bash -c '${CMDS[$1]//\$PORT/$port}'" >/dev/null 2>&1 &
   PID=$!
   for _ in $(seq 1 100); do (echo > /dev/tcp/127.0.0.1/$port) 2>/dev/null && break; sleep 0.1; done
   sleep 0.7
 }
-stop() { pkill -P "$PID" 2>/dev/null || true; kill "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true; sleep 0.7; }
+stop() { kill -TERM -- "-$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true; sleep 0.7; }
 load() { taskset -c 2,3 "$kload" "$port" 2 16 "$secs" "$@"; }
 med() { printf '%s\n' "$@" | sort -n | sed -n "$(( ($# + 1) / 2 ))p"; }
 
