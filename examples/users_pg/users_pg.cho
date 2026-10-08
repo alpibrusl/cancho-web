@@ -534,53 +534,15 @@ fn create_conclude[&h, &m](heap: &!h Heap, rep: &m [byte], status: int, out: buf
     return answer;
 }
 
-// `?limit=&offset=`: the value of `key`, or `fallback` if absent, or -1 if it is
-// not a number.
-fn query_number[&q](query: &q [byte], key: &static [byte], fallback: int) -> [] int {
-    let (from, to) = http.query_value(query, key);
-    if from < 0 {
-        return fallback;
-    }
-    return number_of(query[from..to]);
-}
-
-// Whether every key in the query string is one `GET /users` takes. A key it does
-// not know is refused rather than ignored, for the reason an unknown field in a
-// body is: a client that misspells `limit` should be told, not served the default.
-fn query_keys_known[&q](query: &q [byte]) -> [] bool {
-    var at = 0;
-    while at < len(query) {
-        var end = at;
-        while end < len(query) && int_of(query[end]) != 38 {
-            end = end + 1;
-        }
-        var eq = at;
-        while eq < end && int_of(query[eq]) != 61 {
-            eq = eq + 1;
-        }
-        if !bytes.equal(query[at..eq], "limit") && !bytes.equal(query[at..eq], "offset") {
-            return false;
-        }
-        at = end + 1;
-    }
-    return true;
-}
-
-// Check the query string; the first query is how many users there are.
-fn list_begin[&h, &q, &w](heap: &!h Heap, query: &q [byte], out: buffer.Buffer, keep: bool, rec: &!w [int]) -> [heap] (buffer.Buffer, buffer.Buffer, int) {
-    if !query_keys_known(query) {
-        return done(heap, problem(heap, out, 422, "Unprocessable Content", "unknown query parameter: only limit and offset are taken", keep));
-    }
-    let limit = query_number(query, "limit", default_limit());
-    let offset = query_number(query, "offset", 0);
-    if limit < 1 || limit > max_limit() {
-        return done(heap, problem(heap, out, 422, "Unprocessable Content", "limit must be an integer from 1 to 100", keep));
-    }
-    if offset < 0 {
-        return done(heap, problem(heap, out, 422, "Unprocessable Content", "offset must be a non-negative integer", keep));
+// `limit` and `offset` arrive valid: `web.dispatch` judged them with the nodes that document them.
+// The first query is how many users there are.
+fn list_begin[&h, &g, &w](heap: &!h Heap, args: &g [int], limit_slot: int, offset_slot: int, out: buffer.Buffer, rec: &!w [int]) -> [heap] (buffer.Buffer, buffer.Buffer, int) {
+    var limit = default_limit();
+    if web.present(args, limit_slot) {
+        limit = web.int_arg(args, limit_slot);
     }
     rec[rec_limit()] = limit;
-    rec[rec_offset()] = offset;
+    rec[rec_offset()] = web.int_arg(args, offset_slot);
     rec[rec_phase()] = 0;
     return (out, queries.count_users_start(heap), 1);
 }
@@ -633,12 +595,8 @@ fn list_conclude[&h, &m, &w](heap: &!h Heap, rep: &m [byte], status: int, out: b
     return done(heap, answer);
 }
 
-// `GET` or `DELETE /users/{id}`: the id must be a number; the request is the lookup or the delete.
-fn one_begin[&h, &p, &s](heap: &!h Heap, path: &s [byte], params: &p [int], remove: bool, out: buffer.Buffer, keep: bool) -> [heap] (buffer.Buffer, buffer.Buffer, int) {
-    let id = route.param_nat(path, params, 0);
-    if id < 1 {
-        return done(heap, problem(heap, out, 422, "Unprocessable Content", "id must be a positive integer", keep));
-    }
+// `GET` or `DELETE /users/{id}`: `id` arrives a valid one (1 or more), judged by `web.dispatch`; the request is the lookup or the delete.
+fn one_begin[&h](heap: &!h Heap, id: int, remove: bool, out: buffer.Buffer) -> [heap] (buffer.Buffer, buffer.Buffer, int) {
     if remove {
         return (out, queries.delete_user_start(heap, id), 1);
     }
@@ -681,10 +639,11 @@ fn one_conclude[&h, &m](heap: &!h Heap, rep: &m [byte], status: int, remove: boo
 }
 
 // One parsed request in: the response so far and the request for the database, if it needs one.
-fn begin[&h, &r, &sc, &d, &q, &t, &p, &b, &w](heap: &!h Heap, api: &r web.Api, sc: &sc schema.Schema, new_user: int, doc: &d [byte], request: &q [byte], table: &t [int], params: &!p [int], body: &b [byte], out: buffer.Buffer, rec: &!w [int]) -> [heap] (buffer.Buffer, buffer.Buffer, int) {
+// `web.dispatch` has already refused a request with no route or a parameter that breaks its declaration
+// (it wrote that answer itself); what is left is the work. `cells` and `decode` are its working space.
+fn begin[&h, &r, &sc, &d, &q, &t, &p, &g, &x, &b, &w](heap: &!h Heap, api: &r web.Api, sc: &sc schema.Schema, new_user: int, doc: &d [byte], request: &q [byte], table: &t [int], params: &!p [int], cells: &!g [int], decode: &!x [byte], body: &b [byte], routed_out: buffer.Buffer, rec: &!w [int]) -> [heap] (buffer.Buffer, buffer.Buffer, int) {
     let keep = http.keeps_alive(table);
-    let path = http.path(request, table);
-    let id = web.find(api, http.method(request, table), path, params);
+    let (out, id) = web.dispatch(heap, api, sc, request, table, params, cells, decode, routed_out, keep);
     rec[rec_route()] = id;
     rec[rec_phase()] = 0;
     if keep {
@@ -692,33 +651,28 @@ fn begin[&h, &r, &sc, &d, &q, &t, &p, &b, &w](heap: &!h Heap, api: &r web.Api, s
     } else {
         rec[rec_keep()] = 0;
     }
+    if id == web.answered() {
+        return done(heap, out);
+    }
     if id == 3 {
         return create_begin(heap, sc, new_user, request, table, body, out, keep, rec);
     }
     if id == 2 {
-        return list_begin(heap, http.query(request, table), out, keep, rec);
+        return list_begin(heap, cells, web.slot(api, 2, "limit"), web.slot(api, 2, "offset"), out, rec);
     }
     if id == 4 {
-        return one_begin(heap, path, params, false, out, keep);
+        return one_begin(heap, web.int_arg(cells, web.slot(api, 4, "id")), false, out);
     }
     if id == 5 {
-        return one_begin(heap, path, params, true, out, keep);
+        return one_begin(heap, web.int_arg(cells, web.slot(api, 5, "id")), true, out);
     }
     var answer = out;
     if id == 1 {
         answer = server.reply(heap, answer, 200, "{\"ok\":true}", keep);
     } else if id == 6 {
         answer = server.reply(heap, answer, 200, doc, keep);
-    } else if id == 0 - 2 {
-        var extra = buffer.append(heap, buffer.empty(heap, 48), "Allow: ");
-        extra = web.allowed(heap, api, path, params, extra);
-        extra = buffer.append(heap, extra, "\r\n");
-        borrow extra as &eb in {
-            answer = server.failure_with(heap, answer, 405, "method not allowed", keep, buffer.bytes(eb));
-        }
-        buffer.drop(heap, extra);
     } else {
-        answer = problem(heap, answer, 404, "Not Found", "no such route", keep);
+        answer = problem(heap, answer, 404, "Not Found", "no handler for this route", keep);
     }
     return done(heap, answer);
 }
@@ -749,8 +703,8 @@ fn round_trip[&h, &c, &r](heap: &!h Heap, conn: &!c Conn, request: &r [byte]) ->
 }
 
 // The blocking service: `begin`, and while it has a request, send it and wait.
-fn handle[&h, &c, &r, &sc, &d, &q, &t, &p, &b, &w](heap: &!h Heap, conn: &!c Conn, api: &r web.Api, sc: &sc schema.Schema, new_user: int, doc: &d [byte], request: &q [byte], table: &t [int], params: &!p [int], body: &b [byte], out: buffer.Buffer, rec: &!w [int]) -> [heap, conn_read, conn_write] buffer.Buffer {
-    let (first, req, started) = begin(heap, api, sc, new_user, doc, request, table, params, body, out, rec);
+fn handle[&h, &c, &r, &sc, &d, &q, &t, &p, &g, &x, &b, &w](heap: &!h Heap, conn: &!c Conn, api: &r web.Api, sc: &sc schema.Schema, new_user: int, doc: &d [byte], request: &q [byte], table: &t [int], params: &!p [int], cells: &!g [int], decode: &!x [byte], body: &b [byte], out: buffer.Buffer, rec: &!w [int]) -> [heap, conn_read, conn_write] buffer.Buffer {
+    let (first, req, started) = begin(heap, api, sc, new_user, doc, request, table, params, cells, decode, body, out, rec);
     var answer = first;
     var next = req;
     var code = started;
@@ -786,6 +740,12 @@ fn run[&h, &k, &l, &c](heap: &!h Heap, clock: &k Clock, listener: &!l Listener, 
                 }
             }
             let params = box_slice(heap, 2 * widest, 0);
+            var wide = 2;
+            borrow api as &ar in {
+                wide = web.most_args(ar);
+            }
+            let cells = box_slice(heap, wide, 0);
+            let decode = box_slice(heap, 256, byte_of(0));
             let rec = box_slice(heap, rec_width(), 0);
             var out = buffer.empty(heap, 4096);
             while true {
@@ -805,10 +765,14 @@ fn run[&h, &k, &l, &c](heap: &!h Heap, clock: &k Clock, listener: &!l Listener, 
                         borrow srv as &sr in {
                             borrow mut params as &!pw in {
                                 borrow mut rec as &!rw in {
-                                    borrow api as &ar in {
-                                        borrow sc as &scr in {
-                                            borrow doc as &dr in {
-                                                out = handle(heap, conn, ar, scr, new_user, buffer.bytes(dr), server.head(sr), server.parsed(sr), contents(pw), server.body(sr), out, contents(rw));
+                                    borrow mut cells as &!gw in {
+                                        borrow mut decode as &!xw in {
+                                            borrow api as &ar in {
+                                                borrow sc as &scr in {
+                                                    borrow doc as &dr in {
+                                                        out = handle(heap, conn, ar, scr, new_user, buffer.bytes(dr), server.head(sr), server.parsed(sr), contents(pw), contents(gw), contents(xw), server.body(sr), out, contents(rw));
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -828,6 +792,8 @@ fn run[&h, &k, &l, &c](heap: &!h Heap, clock: &k Clock, listener: &!l Listener, 
             buffer.drop(heap, doc);
             web.drop(heap, api);
             schema.drop(heap, sc);
+            unbox_slice(heap, decode);
+            unbox_slice(heap, cells);
             unbox_slice(heap, params);
             unbox_slice(heap, rec);
             return 0;
@@ -860,6 +826,12 @@ fn run_pool[&h, &k, &l](heap: &!h Heap, clock: &k Clock, listener: &!l Listener,
                 }
             }
             let params = box_slice(heap, 2 * widest, 0);
+            var wide = 2;
+            borrow api as &ar in {
+                wide = web.most_args(ar);
+            }
+            let cells = box_slice(heap, wide, 0);
+            let decode = box_slice(heap, 256, byte_of(0));
             // `begin`'s record while the request is in hand, and one for every ticket's slot after it is held
             let scratch = box_slice(heap, rec_width(), 0);
             let records = box_slice(heap, 2048 * rec_width(), 0);
@@ -962,15 +934,19 @@ fn run_pool[&h, &k, &l](heap: &!h Heap, clock: &k Clock, listener: &!l Listener,
                         borrow srv as &sr in {
                             borrow mut params as &!pw in {
                                 borrow mut scratch as &!cw in {
-                                    borrow api as &ar in {
-                                        borrow sc as &scr in {
-                                            borrow doc as &dr in {
-                                                let (o, n, c) = begin(heap, ar, scr, new_user, buffer.bytes(dr), server.head(sr), server.parsed(sr), contents(pw), server.body(sr), out, contents(cw));
-                                                out = o;
-                                                buffer.drop(heap, request);
-                                                request = n;
-                                                code = c;
-                                                keep = contents(cw)[rec_keep()] == 1;
+                                    borrow mut cells as &!gw in {
+                                        borrow mut decode as &!xw in {
+                                            borrow api as &ar in {
+                                                borrow sc as &scr in {
+                                                    borrow doc as &dr in {
+                                                        let (o, n, c) = begin(heap, ar, scr, new_user, buffer.bytes(dr), server.head(sr), server.parsed(sr), contents(pw), contents(gw), contents(xw), server.body(sr), out, contents(cw));
+                                                        out = o;
+                                                        buffer.drop(heap, request);
+                                                        request = n;
+                                                        code = c;
+                                                        keep = contents(cw)[rec_keep()] == 1;
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -1030,6 +1006,8 @@ fn run_pool[&h, &k, &l](heap: &!h Heap, clock: &k Clock, listener: &!l Listener,
             buffer.drop(heap, doc);
             web.drop(heap, api);
             schema.drop(heap, sc);
+            unbox_slice(heap, decode);
+            unbox_slice(heap, cells);
             unbox_slice(heap, params);
             unbox_slice(heap, scratch);
             unbox_slice(heap, records);

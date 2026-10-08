@@ -228,7 +228,7 @@ the routing the declaration also made. Throughput is unchanged: GET one 123,200-
 > **Status: built (2026-10-08), with the corrections of §9.10.** `web.dispatch`, `web.slot`, `web.most_args` and the
 > accessors are in `src/web.cho`, `examples/users` uses them, and §9.7 says what was shown. This section was written as a
 > design first and is kept as it was written except where a sentence turned out false: those are corrected in place and
-> listed in §9.10. `examples/users_pg` and `examples/users_threads` still use `web.find` and their own checks.
+> listed in §9.10. `examples/users_pg` and `examples/users_threads` were converted afterwards (§9.10).
 
 ### 9.1 The problem, in the code as it stands
 
@@ -443,6 +443,10 @@ and the check that the slot API is not shaped to one example.
   listed, the `Allow` header lost, a bool read inverted, a header decoded, the empty pair skipped, the chain cut after one
   parameter, a parameter not linked to its operation, an unknown key given the wrong place) each fail at least one test. The
   first round missed one: no test said a header is not decoded; it has one now.
-* **Not converted:** `examples/users_pg` and `examples/users_threads` keep `web.find` and their own checks, so their answer to a bad
-  parameter is the old sentence and `users_pg` could not be built or run here (no PostgreSQL server). The suites assert a status and the contract, not a sentence, so
-  they agree on everything they check; the README's "byte for byte" is qualified.
+* **Converted later:** `examples/users_pg` and `examples/users_threads` first kept `web.find` and their own checks, so their answer to
+  a bad parameter was the old sentence and `users_pg` had not been run (no PostgreSQL server in that session). Both now call `web.dispatch`
+  and the hand-written parameter code is deleted. `users_pg` was run against a local PostgreSQL 16: the whole suite (35 tests,
+  Schemathesis included) passes blocking and with a pool of 4, as it did before the change; `users_threads`, which has no suite, was
+  smoke-tested by hand (health, a refused `limit`, an unknown query key, a bad `id`, a 405, a 404, a create, and its served document equal
+  to `users`'s). The suites assert a status and the contract, not a sentence; the sentences now agree by construction. The one
+  difference left in `users_pg`: it learns a parameter's slot with `web.slot` on each request, not once at start-up as `users` does.
