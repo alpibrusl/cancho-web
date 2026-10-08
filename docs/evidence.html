@@ -248,6 +248,31 @@ table.fit.num thead th + th { text-align: right; }
 </tbody></table></div>
 </section>
 
+<section id="scale">
+  <h2>Does the size of the API matter?</h2>
+  <p class="sub">A request should cost the parameters of its operation, not the size of the API. That was argued; the first implementation scanned every declaration record per request and was 6.5% slower on a read, so <code>benches/scale.sh</code> asks it directly. <code>users &lt;port&gt; - &lt;n&gt;</code> declares <code>n</code> more operations after the six real ones, and the same requests go to the same routes in an API of 6, 206 and 2,006 operations. Five rounds, alternating the sizes.</p>
+<div class="fitwrap"><table class="fit num">
+<thead><tr><th>requests a second, median of 5</th><th>GET one user</th><th>GET a page of 20</th><th>GET ?limit=0 (refused)</th></tr></thead>
+<tbody>
+<tr><th>6 operations</th><td class="n">71,219</td><td class="n">62,681</td><td class="n">61,446</td></tr>
+<tr><th>206 operations</th><td class="n">72,588</td><td class="n">63,027</td><td class="n">62,643</td></tr>
+<tr><th>2,006 operations</th><td class="n">73,532</td><td class="n">61,968</td><td class="n">63,555</td></tr>
+</tbody></table></div>
+  <p class="note"><strong>No dependence on the size of the API</strong>: every cell is within 3.5% of the six-operation figure, in both directions, inside what this VM moves by (about 5%). That includes the router, which holds all 2,006 routes.</p>
+  <h3 style="margin-top:2rem">What does grow: start-up</h3>
+  <p class="sub">Declaring operations was never the cost. Generating the OpenAPI document was: it rescanned every record inside loops that already did, and called a helper that was itself a scan. The helper is now a lookup in the index <code>operation</code> keeps, a one-line change that leaves the document byte-identical.</p>
+<div class="fitwrap"><table class="fit num">
+<thead><tr><th>operations declared</th><th>start-up before</th><th>start-up after</th></tr></thead>
+<tbody>
+<tr><th>200</th><td class="n">0.04 s</td><td class="n">0.01 s</td></tr>
+<tr><th>1,000</th><td class="n">1.76 s</td><td class="n">0.13 s</td></tr>
+<tr><th>2,000</th><td class="n">12.77 s</td><td class="n">0.29 s</td></tr>
+<tr><th>4,000</th><td class="n">102.58 s</td><td class="n">1.11 s</td></tr>
+<tr><th>10,000</th><td class="n">(not run)</td><td class="n">8.05 s</td></tr>
+</tbody></table></div>
+  <p class="note">It is <strong>still quadratic</strong> (10,000 operations take 8 s). Nothing here is that large (<code>cancho-hooks</code> has 28 operations, the users API 6), and the cost is paid once, before the first request is accepted. It was found only because this benchmark declared a large API; the design had said declaring and generating were linear, and it is corrected there.</p>
+</section>
+
 <section id="memory">
   <h2>Start-up and memory</h2>
   <p class="sub"><code>benches/resources.py</code>: the time from <code>exec</code> to the first answered <code>GET /health</code>, and the resident memory (the process and everything it started, so a uvicorn master and its workers count) idle, after 1,000 users, with 100 more connections held open and silent, and its high-water mark after 20,000 requests. Medians of 5, not pinned: this is about size, not speed.</p>

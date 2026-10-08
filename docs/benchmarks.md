@@ -517,6 +517,36 @@ connections held open and silent, and its high-water mark (`VmHWM`) after 20,000
   figures are with the files in the page cache.
 * The memory is a *size* result and was not repeated on another machine; the processes are the ones `run.sh` builds.
 
+## Does the size of the API matter? (2026-10-08)
+
+`web.dispatch` finds an operation's parameters through an index (`docs/design.md` §9.10), so a request should cost the parameters of its operation and not the size of the API.
+That was argued, and the first implementation (which scanned every declaration record per request) showed it could fail: 6.5% on an API of six operations. `benches/scale.sh` asks it directly.
+`users <port> - <n>` declares `n` more operations after the six real ones (`GET /filler/<i>/:id`, each with a path parameter, nothing answers them), so the same requests go to the same
+six routes in an API of 6, 206 and 2,006 operations. Five rounds, alternating the sizes, server on core 0, `kload` on cores 2 and 3, median of 5.
+
+| requests a second | GET one user | GET a page of 20 | GET `?limit=0` (refused) |
+|---|---:|---:|---:|
+| 6 operations | 71,219 | 62,681 | 61,446 |
+| 206 operations | 72,588 | 63,027 | 62,643 |
+| 2,006 operations | 73,532 | 61,968 | 63,555 |
+
+**No dependence on the size of the API**: every cell is within 3.5% of the six-operation figure, in both directions, which is inside what this VM moves by (about 5%). (The absolute figures are lower than in the run above:
+this was a different session of the same VM, and the machine drifts between sessions; only the three rows of this table share one.) That includes the router, which holds all 2,006 routes.
+
+**What does grow is the start-up.** Declaring operations was never the cost; generating the OpenAPI document was. It rescanned every record of the declaration, inside loops that already did, and called `op_at`, itself a scan.
+`op_at` is now a lookup in the index `operation` keeps (a one-line change; the document is byte-identical, which the unit tests and the end-to-end comparison check):
+
+| operations declared | start-up before | start-up after |
+|---|---:|---:|
+| 200 | 0.04 s | 0.01 s |
+| 1,000 | 1.76 s | 0.13 s |
+| 2,000 | 12.77 s | 0.29 s |
+| 4,000 | 102.58 s | 1.11 s |
+| 10,000 | (not run) | 8.05 s |
+
+It is **still quadratic** (10,000 operations take 8 s, 2.5 times as many as 4,000 for 7 times the time), and nothing here has an API that large: `cancho-hooks` has 28 operations, the users API 6. The cost is
+paid once, before the first request is accepted. The filler count is capped at 10,000 for that reason. `docs/design.md` §8 said declaring was `O(1)` and that `openapi` "scans them once"; declaring was, and the second half was not true, and is corrected there.
+
 ## Dispatch: a change measured (2026-10-08)
 
 `web.dispatch` (`docs/design.md` §9) judges the declared parameters of every request before the handler runs. Whether that was free is
