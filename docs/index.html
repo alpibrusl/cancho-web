@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>cancho-web</title>
+<title>cancho-web: the API boundary as a checked artifact</title>
 <meta name="description" content="cancho-web makes the API boundary a checked artifact of the program: one declaration defines the route, checks its inputs, generates the OpenAPI document and is what CI tests. Built in cancho, whose compiler states what the service may touch. Alpha.">
 <meta property="og:title" content="cancho-web: the API boundary as a checked artifact">
 <meta property="og:description" content="One declaration defines the route, checks its inputs, generates the OpenAPI document and is what CI tests. The compiler states what the service may touch. Alpha.">
@@ -18,6 +18,17 @@
 <link rel="icon" type="image/png" sizes="64x64" href="favicon.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <meta property="og:url" content="https://alpibrusl.github.io/cancho-web/">
+<link rel="canonical" href="https://alpibrusl.github.io/cancho-web/">
+<meta property="og:site_name" content="cancho-web">
+<meta property="og:locale" content="en">
+<meta name="twitter:title" content="cancho-web: the API boundary as a checked artifact">
+<meta name="twitter:description" content="One declaration defines the route, checks its inputs, generates the OpenAPI document and is what CI tests. The compiler states what the service may touch. Alpha.">
+<meta name="twitter:image" content="https://alpibrusl.github.io/cancho-web/og.png">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<meta name="theme-color" content="#265e8d">
+<meta name="keywords" content="cancho, cancho-web, OpenAPI 3.1, typed web framework, request validation, problem+json, RFC 9457, JSON Schema, systems language, capability effects">
+<meta name="author" content="alpibrusl">
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebSite","@id":"https://alpibrusl.github.io/cancho-web/#site","url":"https://alpibrusl.github.io/cancho-web/","name":"cancho-web","description":"cancho-web makes the API boundary a checked artifact of the program: one declaration defines the route, checks its inputs, generates the OpenAPI document and is what CI tests. Built in cancho, whose compiler states what the service may touch. Alpha.","inLanguage":"en"},{"@type":"SoftwareSourceCode","@id":"https://alpibrusl.github.io/cancho-web/#code","name":"cancho-web","description":"cancho-web makes the API boundary a checked artifact of the program: one declaration defines the route, checks its inputs, generates the OpenAPI document and is what CI tests. Built in cancho, whose compiler states what the service may touch. Alpha.","codeRepository":"https://github.com/alpibrusl/cancho-web","programmingLanguage":"cancho","license":"https://spdx.org/licenses/EUPL-1.2.html","url":"https://alpibrusl.github.io/cancho-web/","image":"https://alpibrusl.github.io/cancho-web/og.png","isPartOf":{"@id":"https://alpibrusl.github.io/cancho-web/#site"}}]}</script>
 <style>
 
 :root {
@@ -311,7 +322,7 @@ let id_value = web.int_arg(args, id_slot);   // valid, 1..99</code></pre>
 
 <section id="numbers">
   <h2>And it is fast, honestly.</h2>
-  <p class="sub">One core each, loopback, one 4-vCPU VM, one run (the second; <a href="evidence.html#bench">the first is in the evidence</a>), repeats within about 5% (a create up to 10%). Every implementation is first held to do the same work: the same requests, the same statuses and bodies. <strong>It is behind a hand-written C server</strong> on a rejected body and a create (by 6% and 11%) and ahead of it on a read and a page.</p>
+  <p class="sub">One core each, loopback, one 4-vCPU VM, one run (the second; <a href="evidence.html#bench">the first is in the evidence</a>), repeats within about 5% (a create up to 10%). Every implementation is first held to do the same work: the same requests, the same statuses and bodies. <strong>It is behind a hand-written C server</strong> on a rejected body and a create (by 6% and 11%) and ahead of it on a read and a page, and <strong>behind Go&rsquo;s <code>fasthttp</code></strong> on a read and a create (by 11% and 7%, in a later run on another VM).</p>
   <div class="two" style="grid-template-columns:1fr">
     <figure class="figure"><img src="figures/bench.svg" width="700" height="518" alt="Requests per second on one core in four cells. cancho-web is 14 to 18 times FastAPI, ahead of Go net/http in all four, ahead of hand-written C on a read and a page and behind it on the other two."><figcaption>Median of 3, requests a second, the figures of <a href="evidence.html#bench">the table</a>. FastAPI is its best of three set-ups in each column. Against FastAPI a gap of 14&ndash;18&times; says mostly that Python&rsquo;s cost per request is high; the Go and C servers are there so that a number is a position, not only a ratio.</figcaption></figure>
   </div>
@@ -325,6 +336,7 @@ let id_value = web.int_arg(args, id_slot);   // valid, 1..99</code></pre>
     <div><b>1.8 MiB</b><span>resident at rest, 2.0 MiB with 100 idle connections (FastAPI: 47 MiB; Go: 7&ndash;12 MiB)</span></div>
     <div><b>4 ms</b><span>to the first answer (FastAPI: about half a second)</span></div>
   </div>
+  <p class="note"><strong>Stronger yardsticks than FastAPI.</strong> A later run, on a slower VM, added Go&rsquo;s <code>fasthttp</code> and Rust&rsquo;s axum (one thread, serde), each held to the same work first. <code>fasthttp</code> served 80,150 reads a second against cancho&rsquo;s 72,153, and 45,428 creates against 42,562; cancho was ahead on a page of 20 (62,320 against 54,236) and level on a rejected body; axum served 39,747 reads. cancho is in the same league as the Go server written for speed, not above it. <a href="evidence.html#yardsticks">The evidence has the table.</a></p>
   <p class="note">None of this measures TLS or a real handler&rsquo;s work. Two cores each are in <a href="evidence.html#cores">the evidence</a>: the gap with FastAPI narrows to 19&ndash;25&times; and does not close. A first run, on a faster VM, had 15&ndash;26&times;: against a Python program the ratio depends on the machine. A service that spends 5 ms in a query is 5 ms slower in all of them.</p>
 </section>
 
