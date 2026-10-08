@@ -494,6 +494,29 @@ not on the other): `GET /health`, `POST /users` with a body that is refused, `GE
 * An earlier version of this table was wrong and was discarded: `run_cores.sh` started one process for the "2 processes" row, so that row showed no scaling at all (77,622 against 77,251).
   It started two after the first table was seen to say something the code could not do, and each contender now runs in its own process group so that no worker outlives its row.
 
+## Start-up and memory (2026-10-08)
+
+Listed above as not measured. `benches/resources.py` starts each server five times and records the time from `exec` to the first answered `GET /health`, and its resident memory
+(`VmRSS` of the process and everything it started, so a uvicorn master and its workers count) at four moments: idle, after 1,000 users were created through it, with 100 more keep-alive
+connections held open and silent, and its high-water mark (`VmHWM`) after 20,000 requests on 16 connections. Medians of 5. The servers are not pinned: this is about size, not speed.
+
+| median of 5 | start-up (ms) | idle (MiB) | 1,000 users (MiB) | 100 idle connections (MiB) | peak after 20,000 requests (MiB) |
+|---|---:|---:|---:|---:|---:|
+| cancho users | 4 | 1.8 | 2.0 | 2.0 | 2.1 |
+| Go `net/http` | 6 | 7.4 | 11.8 | 12.1 | 14.1 |
+| hand-written C (epoll) | 4 | 1.8 | 2.2 | 6.7 | 6.5 |
+| FastAPI lean, uvloop + httptools | 486 | 47.2 | 47.4 | 47.7 | 47.8 |
+| FastAPI lean, 2 workers | 586 | 131.4 | 131.6 | 132.1 | 132.2 |
+
+* **cancho is as small as the hand-written C server at rest and smaller with connections open**: 2.0 MiB with 100 idle connections, where the C server's per-connection buffers
+  take it to 6.7 MiB. Go is 4 times larger idle and 6-7 times with connections open or after a run; FastAPI 24-26 times (one worker) and 66-73 times (two).
+* **What is not shown.** The memory of `http.server` is sized at start from its limits (a connection's buffer, a total budget of 256 MiB for input, up to 1,024 connections), and
+  a resident figure counts only the pages that were touched: **100 idle connections is the light end, and a server with many busy ones, or a store near its 64 MiB, is larger.** The store here
+  held 1,000 small users. A real handler's memory is a real handler's.
+* **The start-up of FastAPI is Python importing**, half a second to the first answer, and is no fault of the framework's design. Neither server was started cold from a disk that had not been read: the
+  figures are with the files in the page cache.
+* The memory is a *size* result and was not repeated on another machine; the processes are the ones `run.sh` builds.
+
 ## Dispatch: a change measured (2026-10-08)
 
 `web.dispatch` (`docs/design.md` §9) judges the declared parameters of every request before the handler runs. Whether that was free is

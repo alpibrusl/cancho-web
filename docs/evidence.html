@@ -158,7 +158,7 @@ table.fit.num thead th + th { text-align: right; }
     </ul></div>
     <div class="no"><h3>Not claimed</h3><ul>
       <li>That it beats C: it is 10% ahead of a hand-written server on a read and a page, and 6% and 11% behind it on a rejected body and a create. The first run had it behind on the page too, and the page ratio is the least settled.</li>
-      <li>Anything about TLS, a real handler&rsquo;s work, memory or start-up time: none was measured. About cores, only two (below).</li>
+      <li>Anything about TLS or a real handler&rsquo;s work: none was measured. About cores, only two (below); about memory, only the size at rest and under 100 idle connections.</li>
       <li>That the absolute figures, or the ratios, hold on another machine. One 4-vCPU VM, one run; repeats differ by about 5%, and a create by up to 10%. The first run, on a faster VM, had cancho at 128,972 on a read and 15&ndash;26&times; FastAPI.</li>
       <li>That responses are enforced: they are documented, and checked from outside.</li>
     </ul></div>
@@ -231,7 +231,7 @@ table.fit.num thead th + th { text-align: right; }
     </ul></div>
     <div class="no"><h3>Not measured</h3><ul>
       <li>Go with Gin or <code>fasthttp</code>; Rust; Node.</li>
-      <li>More than two cores for the server; TLS; a real handler&rsquo;s work; resident memory and start-up time.</li>
+      <li>More than two cores for the server; TLS; a real handler&rsquo;s work.</li>
       <li>FastAPI&rsquo;s usual deployment in the one-core tables: several worker processes. Two cores each are <a href="#cores">below</a>.</li>
     </ul></div>
   </div>
@@ -246,6 +246,30 @@ table.fit.num thead th + th { text-align: right; }
 <tr><th>FastAPI, best of three</th><td class="n">5,216</td><td class="n">4,604</td><td class="n">3,606</td><td class="n">4,163</td></tr>
 <tr><th>cancho-web against FastAPI</th><td class="n">25&times;</td><td class="n">15&times;</td><td class="n">26&times;</td><td class="n">15&times;</td></tr>
 </tbody></table></div>
+</section>
+
+<section id="memory">
+  <h2>Start-up and memory</h2>
+  <p class="sub"><code>benches/resources.py</code>: the time from <code>exec</code> to the first answered <code>GET /health</code>, and the resident memory (the process and everything it started, so a uvicorn master and its workers count) idle, after 1,000 users, with 100 more connections held open and silent, and its high-water mark after 20,000 requests. Medians of 5, not pinned: this is about size, not speed.</p>
+<div class="fitwrap"><table class="fit num">
+<thead><tr><th>median of 5</th><th>start-up (ms)</th><th>idle (MiB)</th><th>1,000 users</th><th>100 idle connections</th><th>peak after 20,000 requests</th></tr></thead>
+<tbody>
+<tr class="us"><th>cancho users</th><td class="n">4</td><td class="n">1.8</td><td class="n">2.0</td><td class="n">2.0</td><td class="n">2.1</td></tr>
+<tr><th>Go <code>net/http</code></th><td class="n">6</td><td class="n">7.4</td><td class="n">11.8</td><td class="n">12.1</td><td class="n">14.1</td></tr>
+<tr><th>hand-written C (epoll)</th><td class="n">4</td><td class="n">1.8</td><td class="n">2.2</td><td class="n">6.7</td><td class="n">6.5</td></tr>
+<tr><th>FastAPI lean, uvloop + httptools</th><td class="n">486</td><td class="n">47.2</td><td class="n">47.4</td><td class="n">47.7</td><td class="n">47.8</td></tr>
+<tr><th>FastAPI lean, 2 workers</th><td class="n">586</td><td class="n">131.4</td><td class="n">131.6</td><td class="n">132.1</td><td class="n">132.2</td></tr>
+</tbody></table></div>
+  <div class="cols">
+    <div><h3>What it says</h3><ul>
+      <li>At rest it is as small as the hand-written C server, and smaller with connections open: 2.0 MiB with 100 idle connections, where the C server&rsquo;s per-connection buffers take it to 6.7 MiB.</li>
+      <li>Go is 4 times larger idle and 6&ndash;7 times with connections open or after a run; FastAPI 24&ndash;26 times (one worker) and 66&ndash;73 times (two). FastAPI&rsquo;s half-second start is Python importing.</li>
+    </ul></div>
+    <div class="no"><h3>Not claimed</h3><ul>
+      <li>That 100 idle connections is the cost of a busy server. A resident figure counts the pages that were touched, <code>http.server</code> is sized from limits (up to 1,024 connections and 256 MiB of input), and a store near its 64 MiB is larger. The store here held 1,000 small users.</li>
+      <li>Start-up from a cold disk: the files were in the page cache. One VM, not repeated elsewhere.</li>
+    </ul></div>
+  </div>
 </section>
 
 <section id="cores">
@@ -271,7 +295,7 @@ table.fit.num thead th + th { text-align: right; }
     <div class="no"><h3>Not claimed</h3><ul>
       <li>cancho&rsquo;s two-core figures may be understated: at 115,000 a second the load generator is near the most it was shown to drive on the first VM, and that check was <strong>not repeated on this VM</strong>.</li>
       <li>Go on two cores was not tuned, and a Go with <code>fasthttp</code> or a Rust <code>axum</code> would be a stronger yardstick. Neither was measured.</li>
-      <li>Four cores for the server, a workload with state, memory.</li>
+      <li>Four cores for the server, a workload with state.</li>
     </ul></div>
   </div>
   <p class="note">An earlier version of this table was wrong and was discarded: the script started one process for the &ldquo;2 processes&rdquo; row, so it showed no scaling at all (77,622 against 77,251). It started two once the table was seen to say something the code could not do.</p>

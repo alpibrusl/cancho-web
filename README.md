@@ -337,6 +337,9 @@ comparison does and does not show):
 * against the **hand-written C server**: 1.10x ahead on a read and a page, 6% and 11% behind on a rejected body and a
   create, and 92% of the most one core can do over loopback TCP (a server that answers one canned reply).
 
+At rest it is **1.8 MiB resident and starts in 4 ms**, 2.0 MiB with 100 idle connections (FastAPI: 47 MiB and half a second; Go: 7-12 MiB); the sizes
+are in [`docs/benchmarks.md`](docs/benchmarks.md#start-up-and-memory-2026-10-08), with what they do not show.
+
 On **two cores each** (two processes sharing a port, against FastAPI's two workers and Go on two cores) the gap with FastAPI
 narrows and does not close: 19-25x, against 23-27x on one core. One cancho process is 13-15x ahead of two FastAPI workers.
 
