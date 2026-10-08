@@ -51,10 +51,6 @@ fn default_limit() -> [] int {
     return 20;
 }
 
-fn max_limit() -> [] int {
-    return 100;
-}
-
 // A decimal number, or -1 for empty text, a non-digit, or more than 17 digits.
 fn number_of[&t](text: &t [byte]) -> [] int {
     if len(text) == 0 || len(text) > 17 {
@@ -190,7 +186,7 @@ fn user_fields[&h](heap: &!h Heap, s: schema.Schema, obj: int, id: int, name: in
 //
 // A route's id is the order it is declared in, which is what `handle` tests: health 1,
 // list 2, create 3, get 4, delete 5, the document 6.
-fn setup[&h](heap: &!h Heap) -> [heap] (schema.Schema, int, web.Api, buffer.Buffer) {
+fn setup[&h](heap: &!h Heap, fillers: int) -> [heap] (schema.Schema, int, web.Api, buffer.Buffer) {
     var s = schema.empty(heap);
     let (s1, name) = schema.new_string(heap, s, 1, 64);
     let (s2, email) = schema.new_string(heap, s1, 3, 120);
@@ -274,6 +270,21 @@ fn setup[&h](heap: &!h Heap) -> [heap] (schema.Schema, int, web.Api, buffer.Buff
 
     let (a6, op_doc) = web.internal(heap, api, "GET", "/openapi.json");
     api = a6;
+
+    // `users <port> - <n>` declares `n` more operations after these (`GET /filler/<i>/:id`, with a path parameter each), which
+    // nothing answers: a larger API, to see what a request to the six above costs when it is larger (`docs/benchmarks.md`).
+    var filler = 0;
+    while filler < fillers {
+        var pattern = buffer.append(heap, buffer.empty(heap, 32), "/filler/");
+        pattern = buffer.push_nat(heap, pattern, filler);
+        pattern = buffer.append(heap, pattern, "/:id");
+        borrow pattern as &pb in {
+            let (af, opf) = web.operation(heap, api, "GET", buffer.bytes(pb), buffer.bytes(pb));
+            api = web.path_param(heap, af, opf, "id", path_id);
+        }
+        buffer.drop(heap, pattern);
+        filler = filler + 1;
+    }
 
     api = web.component(heap, api, "NewUser", new_user);
     api = web.component(heap, api, "User", user);
@@ -456,50 +467,8 @@ fn create[&h, &sc, &q, &t, &b](heap: &!h Heap, sc: &sc schema.Schema, new_user: 
     return (answer, st);
 }
 
-// `?limit=&offset=`: the value of `key`, or `fallback` if absent, or -1 if it is
-// not a number.
-fn query_number[&q](query: &q [byte], key: &static [byte], fallback: int) -> [] int {
-    let (from, to) = http.query_value(query, key);
-    if from < 0 {
-        return fallback;
-    }
-    return number_of(query[from..to]);
-}
-
-// Whether every key in the query string is one `GET /users` takes. A key it does
-// not know is refused rather than ignored, for the reason an unknown field in a
-// body is: a client that misspells `limit` should be told, not served the default.
-fn query_keys_known[&q](query: &q [byte]) -> [] bool {
-    var at = 0;
-    while at < len(query) {
-        var end = at;
-        while end < len(query) && int_of(query[end]) != 38 {
-            end = end + 1;
-        }
-        var eq = at;
-        while eq < end && int_of(query[eq]) != 61 {
-            eq = eq + 1;
-        }
-        if !bytes.equal(query[at..eq], "limit") && !bytes.equal(query[at..eq], "offset") {
-            return false;
-        }
-        at = end + 1;
-    }
-    return true;
-}
-
-fn list[&h, &st, &q](heap: &!h Heap, store: &st Store, query: &q [byte], out: buffer.Buffer, keep: bool) -> [heap] buffer.Buffer {
-    if !query_keys_known(query) {
-        return problem(heap, out, 422, "Unprocessable Content", "unknown query parameter: only limit and offset are taken", keep);
-    }
-    let limit = query_number(query, "limit", default_limit());
-    let offset = query_number(query, "offset", 0);
-    if limit < 1 || limit > max_limit() {
-        return problem(heap, out, 422, "Unprocessable Content", "limit must be an integer from 1 to 100", keep);
-    }
-    if offset < 0 {
-        return problem(heap, out, 422, "Unprocessable Content", "offset must be a non-negative integer", keep);
-    }
+// `limit` and `offset` arrive valid: `web.dispatch` judged them with the nodes that document them.
+fn list[&h, &st](heap: &!h Heap, store: &st Store, limit: int, offset: int, out: buffer.Buffer, keep: bool) -> [heap] buffer.Buffer {
     // The page is spliced together from stored users. Each is already a complete,
     // canonical JSON value -- `create` stored what `render_user` wrote from a body
     // that had just validated, and nothing else ever enters the store -- so the
@@ -535,11 +504,8 @@ fn list[&h, &st, &q](heap: &!h Heap, store: &st Store, query: &q [byte], out: bu
     return answer;
 }
 
-fn one[&h, &st, &p, &s](heap: &!h Heap, store: &!st Store, path: &s [byte], params: &p [int], remove: bool, out: buffer.Buffer, keep: bool) -> [heap] buffer.Buffer {
-    let id = route.param_nat(path, params, 0);
-    if id < 1 {
-        return problem(heap, out, 422, "Unprocessable Content", "id must be a positive integer", keep);
-    }
+// `id` arrives a valid one (1 or more): `web.dispatch` judged it with the node that documents it.
+fn one[&h, &st](heap: &!h Heap, store: &!st Store, id: int, remove: bool, out: buffer.Buffer, keep: bool) -> [heap] buffer.Buffer {
     if !store_has(store, id) {
         return problem(heap, out, 404, "Not Found", "no such user", keep);
     }
@@ -552,42 +518,44 @@ fn one[&h, &st, &p, &s](heap: &!h Heap, store: &!st Store, path: &s [byte], para
 
 // One parsed request in, one response appended to `out`. The store goes in and
 // comes out by value: only a `POST` changes its shape, but the signature cannot
-// say which route that is.
-fn handle[&h, &r, &sc, &d, &q, &t, &p, &b](heap: &!h Heap, api: &r web.Api, sc: &sc schema.Schema, new_user: int, store: Store, doc: &d [byte], request: &q [byte], table: &t [int], params: &!p [int], body: &b [byte], out: buffer.Buffer) -> [heap] (buffer.Buffer, Store) {
+// say which route that is. `web.dispatch` has already refused a request with no
+// route or with a parameter that breaks its declaration (it wrote that answer
+// itself); what is left is the work. `slots` are where `limit`, `offset` and `id`
+// are in `args`, learned once at start-up (`web.slot`).
+fn handle[&h, &r, &sc, &d, &q, &t, &p, &g, &x, &b](heap: &!h Heap, api: &r web.Api, sc: &sc schema.Schema, new_user: int, store: Store, doc: &d [byte], request: &q [byte], table: &t [int], params: &!p [int], args: &!g [int], scratch: &!x [byte], limit_slot: int, offset_slot: int, id_slot: int, body: &b [byte], out: buffer.Buffer) -> [heap] (buffer.Buffer, Store) {
     let keep = http.keeps_alive(table);
-    let path = http.path(request, table);
-    let id = web.find(api, http.method(request, table), path, params);
+    let (routed, id) = web.dispatch(heap, api, sc, request, table, params, args, scratch, out, keep);
+    if id == web.answered() {
+        return (routed, store);
+    }
     if id == 3 {
-        return create(heap, sc, new_user, store, request, table, body, out, keep);
+        return create(heap, sc, new_user, store, request, table, body, routed, keep);
     }
     var st = store;
-    var answer = out;
+    var answer = routed;
     if id == 1 {
         answer = server.reply(heap, answer, 200, "{\"ok\":true}", keep);
     } else if id == 2 {
+        var limit = default_limit();
+        if web.present(args, limit_slot) {
+            limit = web.int_arg(args, limit_slot);
+        }
         borrow st as &str in {
-            answer = list(heap, str, http.query(request, table), answer, keep);
+            answer = list(heap, str, limit, web.int_arg(args, offset_slot), answer, keep);
         }
     } else if id == 4 {
         borrow mut st as &!stw in {
-            answer = one(heap, stw, path, params, false, answer, keep);
+            answer = one(heap, stw, web.int_arg(args, id_slot), false, answer, keep);
         }
     } else if id == 5 {
         borrow mut st as &!stw in {
-            answer = one(heap, stw, path, params, true, answer, keep);
+            answer = one(heap, stw, web.int_arg(args, id_slot), true, answer, keep);
         }
     } else if id == 6 {
         answer = server.reply(heap, answer, 200, doc, keep);
-    } else if id == 0 - 2 {
-        var extra = buffer.append(heap, buffer.empty(heap, 48), "Allow: ");
-        extra = web.allowed(heap, api, path, params, extra);
-        extra = buffer.append(heap, extra, "\r\n");
-        borrow extra as &eb in {
-            answer = server.failure_with(heap, answer, 405, "method not allowed", keep, buffer.bytes(eb));
-        }
-        buffer.drop(heap, extra);
     } else {
-        answer = problem(heap, answer, 404, "Not Found", "no such route", keep);
+        // A route that was declared and has no handler here (only the filler routes of `users <port> - <n>`): an answer, never silence.
+        answer = problem(heap, answer, 404, "Not Found", "no handler for this route", keep);
     }
     return (answer, st);
 }
@@ -596,12 +564,12 @@ fn handle[&h, &r, &sc, &d, &q, &t, &p, &b](heap: &!h Heap, api: &r web.Api, sc: 
 // The loop
 // ---------------------------------------------------------------------
 
-fn run[&h, &k, &l](heap: &!h Heap, clock: &k Clock, listener: &!l Listener) -> [heap, conn_accept, conn_read, conn_write, poll, clock] int {
+fn run[&h, &k, &l](heap: &!h Heap, clock: &k Clock, listener: &!l Listener, fillers: int) -> [heap, conn_accept, conn_read, conn_write, poll, clock] int {
     match poller_new() {
         Polling::Ok(p) => {
             var srv = server.open(heap, p, listener, 16384, 0, 9);
             var store = store_new(heap);
-            let (sc, new_user, api, doc) = setup(heap);
+            let (sc, new_user, api, doc) = setup(heap, fillers);
             var widest = 1;
             borrow api as &ar in {
                 if web.most_params(ar) > 1 {
@@ -609,6 +577,18 @@ fn run[&h, &k, &l](heap: &!h Heap, clock: &k Clock, listener: &!l Listener) -> [
                 }
             }
             let params = box_slice(heap, 2 * widest, 0);
+            var wide = 2;
+            var limit_slot = 0;
+            var offset_slot = 0;
+            var id_slot = 0;
+            borrow api as &ar in {
+                wide = web.most_args(ar);
+                limit_slot = web.slot(ar, 2, "limit");
+                offset_slot = web.slot(ar, 2, "offset");
+                id_slot = web.slot(ar, 4, "id");
+            }
+            let args = box_slice(heap, wide, 0);
+            let scratch = box_slice(heap, 256, byte_of(0));
             var out = buffer.empty(heap, 4096);
             while true {
                 srv = server.wait(heap, srv, clock, listener, 1000);
@@ -626,12 +606,16 @@ fn run[&h, &k, &l](heap: &!h Heap, clock: &k Clock, listener: &!l Listener) -> [
                         }
                         borrow srv as &sr in {
                             borrow mut params as &!pw in {
-                                borrow api as &ar in {
-                                    borrow sc as &scr in {
-                                        borrow doc as &dr in {
-                                            let (answer, back) = handle(heap, ar, scr, new_user, store, buffer.bytes(dr), server.head(sr), server.parsed(sr), contents(pw), server.body(sr), out);
-                                            out = answer;
-                                            store = back;
+                                borrow mut args as &!aw in {
+                                    borrow mut scratch as &!cw in {
+                                        borrow api as &ar in {
+                                            borrow sc as &scr in {
+                                                borrow doc as &dr in {
+                                                    let (answer, back) = handle(heap, ar, scr, new_user, store, buffer.bytes(dr), server.head(sr), server.parsed(sr), contents(pw), contents(aw), contents(cw), limit_slot, offset_slot, id_slot, server.body(sr), out);
+                                                    out = answer;
+                                                    store = back;
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -651,6 +635,8 @@ fn run[&h, &k, &l](heap: &!h Heap, clock: &k Clock, listener: &!l Listener) -> [
             web.drop(heap, api);
             schema.drop(heap, sc);
             store_drop(heap, store);
+            unbox_slice(heap, scratch);
+            unbox_slice(heap, args);
             unbox_slice(heap, params);
             return 0;
         }
@@ -665,16 +651,29 @@ fn main(world: World) -> [] int {
     release(fs);
     release(ffi);
     var port = 0 - 1;
+    var reuse = 0;
+    var fillers = 0;
     borrow args as &g in {
         if arg_count(g) > 1 {
             port = number_of(arg(g, 1));
+        }
+        // `users <port> reuseport`: several copies may listen on one port, each with its own store (`benches/run_cores.sh`).
+        if arg_count(g) > 2 && bytes.equal(arg(g, 2), "reuseport") {
+            reuse = 1;
+        }
+        // `users <port> - <n>`: `n` operations more than the six the API has (`benches/scale.sh`).
+        if arg_count(g) > 3 {
+            fillers = number_of(arg(g, 3));
+            if fillers > 10000 {
+                fillers = 10000;
+            }
         }
     }
     var status = 2;
     if port > 0 && port < 65536 {
         status = 3;
         borrow net as &nn in {
-            match tcp_listen(nn, port, 1024, 0) {
+            match tcp_listen(nn, port, 1024, reuse) {
                 Listening::Ok(l) => {
                     var listener = l;
                     borrow mut listener as &!lh in {
@@ -690,7 +689,7 @@ fn main(world: World) -> [] int {
                                 buffer.drop(h, line);
                             }
                             borrow clock as &c in {
-                                status = run(h, c, lh);
+                                status = run(h, c, lh, fillers);
                             }
                         }
                     }

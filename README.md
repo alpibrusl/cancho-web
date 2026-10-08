@@ -1,28 +1,42 @@
+<p align="center"><img src="docs/logo.png" alt="cancho-web" width="220"></p>
+
 # cancho-web
 
 [![ci](https://github.com/alpibrusl/cancho-web/actions/workflows/ci.yml/badge.svg)](https://github.com/alpibrusl/cancho-web/actions/workflows/ci.yml)
 
-A web layer for [cancho](https://github.com/alpibrusl/cancho), a typed systems language
-with linear ownership and capability effects: routes with typed parameters, request bodies
-validated by [`cancho-schema`](https://github.com/alpibrusl/cancho-schema), `problem+json`
-errors, and an OpenAPI document generated from the same declarations -- on top of the
-`http.server` package that `cancho` ships (`packages/http-server/`).
+**Declare the API once.** A web layer for [cancho](https://github.com/alpibrusl/cancho), a typed systems language
+with linear ownership and capability effects: routes with typed parameters, request bodies validated by
+[`cancho-schema`](https://github.com/alpibrusl/cancho-schema), `problem+json` errors, and an OpenAPI document generated from
+the same declarations -- on top of the `http.server` package that `cancho` ships (`packages/http-server/`). The
+[project page](https://alpibrusl.github.io/cancho-web/) has the pictures, [the examples](https://alpibrusl.github.io/cancho-web/examples.html)
+and [the evidence](https://alpibrusl.github.io/cancho-web/evidence.html).
 
-One thread, a `Poller`, no `Ffi`, no `extern fn`: the compiled server's authority report
-names exactly what it can do, and C is not on the list.
+One thread, a `Poller`, no `Ffi`, no `extern fn`: the compiled server's authority report names exactly what it can do, and C is not on the list.
 
 ## Status
 
-**The declaration half of the framework is built.**
+**Alpha. The declaration half of the framework is built.**
 [`examples/users`](examples/users/users.cho) is a CRUD JSON API over `http.server` and
 `cancho-schema`, held to its own OpenAPI document by an end-to-end test over real sockets
 and by Schemathesis, and benchmarked against FastAPI, Go and C ([below](#benchmarks)).
 [`src/web.cho`](src/web.cho) declares each operation once -- its route, parameters, body and
 responses -- and the router and the OpenAPI document both come from that declaration
 (the document is checked in as [`examples/users/openapi.json`](examples/users/openapi.json),
-so a change to the API is a change to a file). Not yet: dispatch -- the handler is still an
-`if` on the route id and still checks its own path and query parameters -- and middleware
-([`docs/design.md`](docs/design.md) §8 says what is next and why).
+so a change to the API is a change to a file). `web.dispatch` judges a request's path, query and header parameters with the
+schema nodes that document them *before* the handler runs, so the handler is not reached for a request that breaks the
+contract (`examples/users` uses it; [`docs/design.md`](docs/design.md) §9). Not yet: middleware, and defaults declared
+once ([`docs/design.md`](docs/design.md) §8 and §9.10 say what is next and why).
+
+## What you get
+
+* **One declaration.** An operation's route, parameters, body and responses are written once; the router and the OpenAPI 3.1 document are made from it, so a route cannot be served and undocumented.
+* **Parameters judged before the handler.** `web.dispatch` checks every declared path, query and header parameter against its schema node, refuses an unknown or repeated query key, and answers the 404, the 405 or the 422 itself; the handler reads valid values from a slot table.
+* **Every error at once.** A body that breaks the rules gets all of its errors, each with its JSON Pointer, as RFC 9457 `application/problem+json`. No coercion.
+* **A contract that is a file.** The served document is byte for byte the checked-in `openapi.json`, and Schemathesis generates requests from it.
+* **Who may call, declared.** Bearer schemes, `require` and `no_auth` are written to the document and can be read back; nothing here checks a token.
+* **A package.** `web` is published as a store, so a project names it in `cancho.toml` instead of copying a file.
+* **Fast, measured.** 14-18x FastAPI and 1.3-1.4x Go `net/http` on one core, 19-25x FastAPI's two workers on two; ahead of a hand-written C server on a read and a page, 6-11% behind it on the rest ([benchmarks](#benchmarks)).
+* **PostgreSQL**, optionally, with a pool: the same API, the same tests, the same document.
 
 ## Requirements
 
@@ -137,8 +151,9 @@ Content-Type: application/problem+json
 
 $ curl -i 'localhost:8080/users?limit=0'
 HTTP/1.1 422 Unprocessable Content
+Content-Type: application/problem+json
 
-{"type":"about:blank","title":"Unprocessable Content","status":422,"detail":"limit must be an integer from 1 to 100"}
+{"type":"about:blank","title":"Unprocessable Content","status":422,"count":1,"errors":[{"pointer":"/query/limit","code":"minimum","detail":"is below the minimum"}]}
 ```
 
 | | |
@@ -156,7 +171,7 @@ leaves a hole, ids are not reused.
 
 [`examples/users_pg`](examples/users_pg/users_pg.cho) is this service with a table behind it: the same routes,
 the same schema nodes, the same OpenAPI document (plus a `pattern` on `name` and `email`, which refuse
-U+0000 because PostgreSQL text cannot hold it) and the same answers, byte for byte, and the end-to-end suite,
+U+0000 because PostgreSQL text cannot hold it) and the same answers, byte for byte (except the `422` for a bad parameter: `users_pg` has not been moved to `web.dispatch`), and the end-to-end suite,
 Schemathesis included, runs against it unchanged (`USERS_PG=1 python3 tests/e2e.py`). It reaches the
 database through functions that `pgen` (in [`cancho-pg`](https://github.com/alpibrusl/cancho-pg)) wrote from
 [`queries.sql`](examples/users_pg/queries.sql) by asking the server what each statement's parameters and
@@ -214,9 +229,27 @@ api = web.respond(heap, api, op_get, 200, "the user", user);
 api = web.respond_problem(heap, api, op_get, 404);
 api = web.respond_problem(heap, api, op_get, 422);
 ...
-let id = web.find(api, http.method(request, table), path, params);   // in handle
-if id == 3 { return create(heap, sc, new_user, store, request, table, body, out, keep); }
+let (routed, id) = web.dispatch(heap, api, sc, request, table, params, args, scratch, out, keep);   // in handle
+if id == web.answered() { return (routed, store); }       // the 404, 405 or 422 is already written
+if id == 3 { return create(heap, sc, new_user, store, request, table, body, routed, keep); }
 ```
+
+`dispatch` is called in the application's loop where `web.find` was; it is not a callback and keeps nothing. For a request that
+has a route and valid parameters it answers the route id and fills `args`, two ints for each declared parameter, in the order
+they were declared; the slots are learned once at start-up:
+
+```
+let limit_slot = web.slot(api, op_list, "limit");          // once, by name
+...
+if web.present(args, limit_slot) { limit = web.int_arg(args, limit_slot); }   // a valid int, 1..100: dispatch judged it
+```
+
+A parameter that breaks its node is a `422` that lists every error, with where it is (`/query/limit`, `/path/id`,
+`/header/Idempotency-Key`) and a code a client can switch on (`type`, `range`, `minimum`, `maximum`, `min_length`,
+`max_length`, `choice`, `required`, `unknown`, `duplicate`, `nul`). A path or query value is judged decoded (`%35` is `5`; in a
+query `+` is a space); an integer is digits and nothing else (`5.0`, `+5` and `0x5` are `type`). `web.slot`, `web.most_args`,
+`web.int_arg`, `web.bool_arg`, `web.present`, `web.text_start` and `web.text_end` are the accessors; `web.find` is
+unchanged and `examples/users_pg` and `examples/users_threads` still use it.
 
 Who may call an operation is declared the same way, and only the document is affected (the
 application's own gate still decides): `web.bearer_scheme(heap, api, "admin", "the admin token")`,
@@ -294,19 +327,27 @@ comparison does and does not show):
 
 | requests a second | GET one | page of 20 | rejected body | create |
 |---|---:|---:|---:|---:|
-| **cancho** | **128,972** | **70,768** | **94,659** | **64,327** |
-| Go `net/http` | 79,772 | 65,654 | 60,278 | 53,580 |
-| hand-written C (epoll) | 117,958 | 105,523 | 107,680 | 91,783 |
-| FastAPI (best set-up) | 5,216 | 4,604 | 3,606 | 4,163 |
+| **cancho** | **83,289** | **75,286** | **63,241** | **53,755** |
+| Go `net/http` | 65,216 | 53,792 | 47,011 | 41,051 |
+| hand-written C (epoll) | 75,734 | 68,144 | 67,376 | 60,719 |
+| FastAPI (best set-up) | 4,921 | 4,307 | 3,536 | 3,948 |
 
-* against **FastAPI**: about 15-26x, and a p99 of 0.44 ms against 12 ms;
-* against **Go's `net/http`**: 1.1-1.6x ahead, with half the p99;
-* against the **hand-written C server**: level on a read, 12-33% behind on the rest, and 94% of
-  the most one core can do over loopback TCP (a server that answers one canned reply).
+* against **FastAPI**: 14-18x, and a p99 of 0.55 ms against 10.8 ms;
+* against **Go's `net/http`**: 1.3-1.4x ahead, with a p99 of two thirds of Go's;
+* against the **hand-written C server**: 1.10x ahead on a read and a page, 6% and 11% behind on a rejected body and a
+  create, and 92% of the most one core can do over loopback TCP (a server that answers one canned reply).
 
-One 4-vCPU VM, one run; repeats differ by about 5% (a create by up to 10%). The page endpoint
-was 40,755 in the first comparison: the comparison is what found the two causes, one in the
-example and one in cancho's `std.buffer`, both fixed.
+A request costs the same in an API of 6, 206 or 2,006 operations (within 3.5%, the noise of the VM). At rest it is **1.8 MiB resident and starts in 4 ms**, 2.0 MiB with 100 idle connections (FastAPI: 47 MiB and half a second; Go: 7-12 MiB); the sizes
+are in [`docs/benchmarks.md`](docs/benchmarks.md#start-up-and-memory-2026-10-08), with what they do not show.
+
+On **two cores each** (two processes sharing a port, against FastAPI's two workers and Go on two cores) the gap with FastAPI
+narrows and does not close: 19-25x, against 23-27x on one core. One cancho process is 13-15x ahead of two FastAPI workers.
+
+One 4-vCPU VM, one run; repeats differ by about 5% (a create by up to 10%). **The first run, on a faster VM and before
+`web.dispatch`, had 128,972 on a read and 15-26x FastAPI**: FastAPI barely moved between the two VMs (5,216 and 4,921) and cancho did
+(0.65x), so a ratio against a Python program depends on the machine; both runs are in [`docs/benchmarks.md`](docs/benchmarks.md),
+with what each does and does not show. The page endpoint was 40,755 in the first comparison: the comparison is what found the two
+causes, one in the example and one in cancho's `std.buffer`, both fixed.
 
 ## Layout
 
@@ -320,23 +361,46 @@ tests/e2e.py              the end-to-end tests (real binary, real sockets, Schem
 tests/web_test.cho         unit tests of `web`: documents derived by hand, compared byte for byte
 benches/                  the benchmark: the FastAPI, Go and C implementations of the same
                           API, the load generator, and the checks that they do the same work
+                          (`ab.sh` times two builds of the service, alternated: is a change free?)
 docs/design.md            what the framework layer will be, and what building the example found
 docs/benchmarks.md        the method, the numbers, and how to read them
+docs/index.html           the project page; examples.html and evidence.html beside it
+docs/logo.jpg             the logo as given; scripts/site_assets.py derives the page's images from it
+scripts/figures.py        draws docs/figures/bench.svg from the table in this file
 ```
 
 ## Limitations
 
 Not yet built:
 
-Dispatch and parameter validation by construction (a path or query parameter that fails its
-schema is still a check the handler makes); middleware, auth, and anything like FastAPI's
-dependency injection; TLS; streaming bodies; more than one core; `$ref`/`$defs` in the generated
-JSON Schema. The design document says which of these are decided and which are open.
+Middleware, auth, and anything like FastAPI's dependency injection; defaults declared once
+(a handler still says what `limit` is when it is absent); `$ref`/`$defs` in the generated JSON Schema; `dispatch` in
+`examples/users_pg` and `examples/users_threads`, which keep `web.find` and their own checks (so their answer to a bad parameter
+is still the old sentence). The design document says which of these are decided and which are open.
 
-## Documentation
+What `cancho` has now that this layer has not been tried with (corrected 2026-10-08; this file used to list all three as
+missing):
 
-- [`docs/design.md`](docs/design.md): what the framework layer will be, and what building the example found.
-- [`docs/benchmarks.md`](docs/benchmarks.md): the method, the numbers, and how to read them.
+* **TLS.** `cancho` has a TLS 1.3 server (`packages/tls`; its own notes say it has not been independently reviewed) and
+  `http.server` can be driven by bytes instead of sockets (`docs/http-server.md` section 11), which is how its
+  `examples/https_hello` serves HTTPS with keep-alive and pipelining. The loop here is the application's own, so
+  nothing in `web` stands in the way, but **no service in this repository has been put behind it**: no example, no
+  test, no measurement. Until one is, terminate TLS in front.
+* **More than one core.** `cancho` has threads (`spawn` and `join`). `examples/users_threads` runs the unchanged loop in two
+  of them (one heap and one clock each, one `SO_REUSEPORT` listener) and measured no worse than two processes
+  ([`docs/benchmarks.md`](docs/benchmarks.md#two-threads-in-one-process)). Each thread keeps its own store, so it is not a
+  deployable service: a store the threads share is not built.
+* **Streaming.** `http.server` can stream a *response*; this layer does not use it. A request body is still read whole
+  (a `413` past its buffer).
+
+## Learn more
+
+| | |
+|---|---|
+| [the project page](https://alpibrusl.github.io/cancho-web/), [the examples](https://alpibrusl.github.io/cancho-web/examples.html) | what it is, and the users API run |
+| [the evidence](https://alpibrusl.github.io/cancho-web/evidence.html) | the tests, what building it found, what is not claimed |
+| [`docs/design.md`](docs/design.md) | what the framework layer will be, and what building the example found |
+| [`docs/benchmarks.md`](docs/benchmarks.md) | the method, the numbers, and how to read them |
 
 ## Contributing
 

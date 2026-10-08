@@ -10,7 +10,7 @@ env:
   # that builds them. The locks in deps/ pin source hashes; these pin the
   # repositories (and the compiler, whose bundled `std` no lock records).
   CANCHO_REV: a4572ea3b506e4bcec1c4be43deda1043c11ba9f
-  SCHEMA_REV: 5152851c7487315cb20f031c9c1c69216e5a2931
+  SCHEMA_REV: 59a70285ff23af63a226bc56ff978feccb4cf8ca
   PG_REV: f1b972fb519f16a9982146691e4a28ef3bc9d79d
 
 jobs:
@@ -149,6 +149,14 @@ jobs:
           CANCHO_DIR: ${{ github.workspace }}/cancho
           SCHEMA_DIR: ${{ github.workspace }}/cancho-schema
         run: benches/check.sh
+
+      # The site (docs/*.html): its figure comes from the table in the README, and its links resolve. (Its images are derived from
+      # docs/logo.jpg by scripts/site_assets.py, which needs Pillow and is run by hand.)
+      - name: The site's figure is the README's table, and its links resolve
+        working-directory: web
+        run: |
+          python3 scripts/figures.py --check
+          python3 scripts/check_site.py
 
       - name: kload compiles
         working-directory: web

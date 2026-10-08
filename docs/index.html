@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cancho-web</title>
+<meta name="description" content="A web layer for cancho: declare each operation once and get the router and an OpenAPI 3.1 document from it. Request bodies validated by cancho-schema, every error at once as problem+json. One thread, no Ffi, no C. Alpha.">
+<meta property="og:title" content="cancho-web: declare the API once">
+<meta property="og:description" content="Routes, typed parameters, validated bodies and an OpenAPI 3.1 document, from one declaration. One thread, no Ffi. Alpha.">
+<meta name="color-scheme" content="light dark">
+<meta property="og:type" content="website">
+<meta property="og:image" content="https://alpibrusl.github.io/cancho-web/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="cancho-web: a web layer for cancho. A route and its contract are declared once. Bodies are checked by schema. No Ffi, no C.">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="icon" type="image/png" sizes="64x64" href="favicon.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta property="og:url" content="https://alpibrusl.github.io/cancho-web/">
+<style>
+
+:root {
+  --bg: #fbfbfc; --fg: #14171c; --muted: #566170; --line: #e1e4ea; --surface: #ffffff; --soft: #f0f3f6;
+  --accent: #265e8d; --accent-fg: #ffffff; --good: #0f7b5f; --warn: #92400e; --warn-bg: #fdf6e7; --warn-line: #e0b765; --bad: #d1362f;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0d1217; --fg: #e8eaee; --muted: #9ba5b3; --line: #232932; --surface: #141a21; --soft: #182029;
+    --accent: #6fa3d6; --accent-fg: #0a1522; --good: #4fd1a5; --warn: #f3c77a; --warn-bg: #1d1a12; --warn-line: #8a6a2a; --bad: #ff6b63; }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; scroll-padding-top: 4rem; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 1rem/1.6 var(--font); }
+a { color: var(--accent); text-underline-offset: .15em; }
+.wrap { width: 100%; max-width: 68rem; margin: 0 auto; padding: 0 20px; }
+.skip { position: absolute; left: 16px; top: -4rem; background: var(--accent); color: var(--accent-fg); padding: .5rem .8rem; border-radius: 6px; z-index: 9; }
+.skip:focus { top: 8px; }
+a:focus-visible, .btn:focus-visible, pre:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+header.top { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+header.top .wrap { display: flex; align-items: center; gap: 1.5rem; height: 3.4rem; }
+.brand { font: 700 1rem var(--mono); color: var(--fg); text-decoration: none; letter-spacing: -.01em; white-space: nowrap; }
+nav { display: flex; gap: 1.2rem; margin-left: auto; }
+nav a { color: var(--muted); text-decoration: none; font-size: .93rem; white-space: nowrap; }
+nav a:hover { color: var(--fg); }
+@media (max-width: 40rem) { nav a.opt { display: none; } }
+
+h1 { font-size: clamp(2.3rem, 6.2vw, 4rem); line-height: 1.04; letter-spacing: -.035em; margin: 0 0 1rem; font-weight: 750; }
+h2 { font-size: clamp(1.6rem, 3.4vw, 2.2rem); line-height: 1.15; letter-spacing: -.025em; margin: 0 0 .5rem; font-weight: 700; }
+h3 { font-size: 1.05rem; margin: 0 0 .25rem; }
+p { margin: 0 0 1rem; }
+section { padding: 4.5rem 0 0; }
+.lead { font-size: 1.2rem; color: var(--muted); max-width: 34rem; }
+.sub { color: var(--muted); max-width: 38rem; }
+code { font-family: var(--mono); font-size: .9em; background: var(--soft); padding: .1em .35em; border-radius: 5px; }
+
+.hero { padding: 4rem 0 0; display: grid; gap: 2.5rem; align-items: center; }
+@media (min-width: 58rem) { .hero { grid-template-columns: 1.05fr 1fr; } }
+.badge { display: inline-flex; gap: .5rem; align-items: center; font-size: .82rem; color: var(--warn); background: var(--warn-bg); border: 1px solid var(--warn-line); padding: .22rem .7rem; border-radius: 999px; margin-bottom: 1.2rem; text-decoration: none; }
+.badge i { width: .5rem; height: .5rem; border-radius: 50%; background: var(--warn-line); display: inline-block; }
+.cta { display: flex; flex-wrap: wrap; gap: .7rem; margin-top: 1.6rem; }
+.btn { display: inline-block; padding: .65rem 1.15rem; border-radius: 8px; font-weight: 600; text-decoration: none; border: 1px solid var(--accent); }
+.btn.primary { background: var(--accent); color: var(--accent-fg); }
+.btn.ghost { color: var(--accent); }
+.btn.ghost:hover { background: var(--soft); }
+
+.term { background: #0d1117; color: #d6dde8; border: 1px solid #262c36; border-radius: 12px; font: .84rem/1.65 var(--mono); padding: 1rem 1.1rem 1.1rem; box-shadow: 0 18px 50px -24px rgba(20, 30, 70, .55); overflow-x: auto; }
+.term .bar { display: flex; gap: .35rem; margin-bottom: .8rem; }
+.term .bar i { width: .65rem; height: .65rem; border-radius: 50%; background: #2d3440; display: block; }
+.term .c { color: #7d8797; } .term .g { color: #5fd3a6; } .term .b { color: #8cb0ff; } .term .y { color: #e8c170; } .term .r { color: #ff8b82; }
+.term pre { margin: 0; white-space: pre; }
+
+.three { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); margin-top: 3.2rem; }
+.three div { border-top: 3px solid var(--accent); padding-top: .8rem; }
+.three p { color: var(--muted); margin: 0; font-size: .96rem; }
+
+.figure { margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 1.2rem; }
+.figure.wide { margin-top: 2rem; }
+.figure svg, .figure img { display: block; width: 100%; height: auto; }
+.figure h3 { margin-bottom: .6rem; }
+.figure figcaption { color: var(--muted); font-size: .88rem; margin-top: .8rem; }
+.two { display: grid; gap: 1rem; grid-template-columns: 1fr; margin-top: 2rem; }
+@media (min-width: 52rem) { .two { grid-template-columns: 1fr 1fr; } }
+svg .t { fill: var(--fg); font: 600 13px var(--font); } svg .s { fill: var(--muted); font: 12px var(--font); }
+svg .box { fill: var(--surface); stroke: var(--line); stroke-width: 1.4; } svg .hot { fill: var(--soft); stroke: var(--accent); stroke-width: 2; }
+svg .ar { stroke: var(--muted); stroke-width: 1.5; fill: none; } svg .dash { stroke-dasharray: 5 4; }
+svg .dot { fill: var(--accent); } svg .axis { stroke: var(--line); stroke-width: 2; }
+svg .bar1 { fill: var(--accent); } svg .bar2 { fill: var(--line); }
+
+.grid { display: grid; gap: 1px; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); background: var(--line); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; margin-top: 2rem; }
+.grid div { background: var(--surface); padding: 1.1rem 1.2rem; }
+.grid p { color: var(--muted); font-size: .93rem; margin: 0; }
+
+.stats { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); margin: 2rem 0 0; }
+.stats div { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 1rem 1.1rem; }
+.stats b { display: block; font: 700 1.9rem/1.1 var(--font); letter-spacing: -.03em; }
+.stats span { color: var(--muted); font-size: .88rem; }
+.note { color: var(--muted); font-size: .88rem; margin-top: .9rem; }
+
+pre.code { background: var(--soft); border: 1px solid var(--line); border-radius: 12px; padding: 1rem 1.1rem; font: .86rem/1.65 var(--mono); overflow-x: auto; margin: 1.4rem 0 0; }
+.status { margin-top: 4.5rem; background: var(--warn-bg); border: 1px solid var(--warn-line); border-radius: 14px; padding: 1.3rem 1.5rem; }
+.status h2 { font-size: 1.2rem; letter-spacing: -.01em; }
+.status ul { margin: .4rem 0 0; padding-left: 1.2rem; color: var(--muted); }
+footer { margin-top: 4rem; border-top: 1px solid var(--line); padding: 1.6rem 0 2.6rem; color: var(--muted); font-size: .9rem; }
+footer .wrap { display: flex; flex-wrap: wrap; gap: .5rem 1.6rem; }
+table.fit { width: 100%; border-collapse: collapse; margin-top: 2rem; font-size: .95rem; }
+table.fit th, table.fit td { text-align: left; padding: .8rem .9rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.fit thead th { color: var(--muted); font-weight: 600; font-size: .85rem; }
+table.fit tbody th { font-weight: 650; }
+table.fit td { color: var(--muted); }
+table.fit tr.us { background: var(--soft); } table.fit tr.us td, table.fit tr.us th { color: var(--fg); }
+@media (max-width: 44rem) { .fitwrap { overflow-x: auto; } table.fit.wide { min-width: 38rem; } }
+.cols { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); margin-top: 1.4rem; }
+.cols > div { border: 1px solid var(--line); border-radius: 14px; padding: 1.1rem 1.3rem; background: var(--surface); }
+.cols ul { margin: .4rem 0 0; padding-left: 1.1rem; color: var(--muted); } .cols li { margin: .25rem 0; }
+.cols .no h3 { color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+.logo { display: block; width: 11rem; height: auto; border-radius: 14px; background: #fff; padding: .35rem; border: 1px solid var(--line); margin-bottom: 1.4rem; }
+header.top img.mark { width: 1.9rem; height: 1.9rem; display: block; }
+header.top .brand { display: inline-flex; align-items: center; gap: .55rem; }
+table.fit.num td, table.fit.num th { white-space: nowrap; } table.fit.num td.n { text-align: right; font-variant-numeric: tabular-nums; }
+.good { color: var(--good); } .bad { color: var(--bad); }
+.two { align-items: start; }
+table.fit.wide tbody th { white-space: nowrap; }
+pre code { padding: 0; background: none; }
+nav a[aria-current] { color: var(--fg); font-weight: 650; }
+table.fit.num thead th + th { text-align: right; }
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="top"><div class="wrap">
+  <a class="brand" href="index.html"><img class="mark" src="mark.png" alt="" width="30" height="30">cancho-web</a>
+  <nav aria-label="Sections">
+    <a href="index.html" aria-current="page" class="opt">Overview</a><a href="examples.html">Examples</a><a href="evidence.html" class="opt">Evidence</a><a href="index.html#numbers" class="opt">Numbers</a><a href="examples.html#run">Run it</a>
+    <a href="https://github.com/alpibrusl/cancho-web" class="opt">GitHub</a>
+  </nav>
+</div></header>
+
+<main id="main" class="wrap">
+
+<div class="hero" id="top">
+  <div>
+    <img class="logo" src="logo.png" alt="cancho web: a rock caught in a web, in front of a blue circle" width="176" height="176">
+    <a class="badge" href="#status"><i></i>Alpha · declaration and parameter dispatch are built; middleware is not</a>
+    <h1>Declare the API once.</h1>
+    <p class="lead">Each operation is declared once: its route, parameters, body and responses. The router and the OpenAPI document both come from that declaration, so a route cannot be served and undocumented. Parameters and bodies are checked by the same schema nodes that document them, and the handler is not reached for a request that breaks them.</p>
+    <div class="cta"><a class="btn primary" href="examples.html#run">Run it</a><a class="btn ghost" href="examples.html">Examples</a><a class="btn ghost" href="#proof">See the evidence</a></div>
+  </div>
+  <div class="term" role="img" aria-label="A body that breaks four rules is refused with all four errors; a missing user is a 404 problem; the OpenAPI document lists the three paths."><div class="bar"><i></i><i></i><i></i></div>
+<pre><span class="c">$</span> curl -si -XPOST -H 'Content-Type: application/json' \
+    -d '{"name":"","age":151,"role":"root","nope":1}' \
+    localhost:8080/users
+HTTP/1.1 <span class="r">422 Unprocessable Content</span>
+Content-Type: <span class="y">application/problem+json</span>
+
+{"status":422,"count":<span class="y">4</span>,"errors":[
+ {"pointer":"<span class="y">/name</span>","code":"min_length",…},
+ {"pointer":"<span class="y">/age</span>","code":"maximum",…},
+ {"pointer":"<span class="y">/role</span>","code":"choice",…},
+ {"pointer":"<span class="y">/nope</span>","code":"unknown",…}]}
+<span class="c"># (type, title and each detail left out here)</span>
+
+<span class="c">$</span> curl -s localhost:8080/openapi.json | …
+<span class="g">3.1.0</span> ['/health', '/users', '/users/{id}']</pre>
+  </div>
+</div>
+
+<div class="three">
+  <div><h3>One declaration</h3><p>The route, its parameters, body and responses are written once. The router and the OpenAPI 3.1 document are made from it, and the document is checked in, so a change to the API is a change to a file.</p></div>
+  <div><h3>Every error, with where</h3><p>A body or a parameter that breaks the rules gets all of its errors at once, each with where it is, as RFC 9457 <code>problem+json</code>. No coercion: <code>"3"</code> is not an integer, and neither is <code>5.0</code> in a query.</p></div>
+  <div><h3>One thread, no C</h3><p>A single loop on <code>http.server</code>. <code>cancho authority</code> on the built service names what it can touch, and <code>ffi</code> and the filesystem are not on the list.</p></div>
+</div>
+
+<section id="why">
+  <h2>What a request meets.</h2>
+  <div class="fitwrap"><table class="fit">
+    <thead><tr><th>When</th><th>What the service answers</th></tr></thead>
+    <tbody>
+      <tr><th>A body breaks the schema</th><td><code>422</code> with every error and its pointer. An unknown key is an error too.</td></tr>
+      <tr><th>The body is not JSON, or the content type is not</th><td><code>400</code> with the byte it failed at; <code>415</code> for another content type.</td></tr>
+      <tr><th>A path, query or header parameter breaks its schema, a query key is unknown or repeated</th><td><code>422</code> from <code>web.dispatch</code>, before the handler runs: every error, each at <code>/query/limit</code>, <code>/path/id</code> or <code>/header/…</code> with a code (<code>maximum</code>, <code>type</code>, <code>unknown</code>, <code>duplicate</code>). A client that misspells <code>limit</code> is told, not served the default.</td></tr>
+      <tr><th>No such route, or the wrong method</th><td><code>404</code> as <code>problem+json</code>; <code>405</code> with <code>Allow</code>. Both written by <code>dispatch</code>.</td></tr>
+      <tr><th>A user is deleted</th><td><code>204</code> with no body and neither <code>Content-Length</code> nor <code>Content-Type</code>, framed correctly even when pipelined.</td></tr>
+      <tr><th>The store is full</th><td><code>503</code>, not a crash. The example holds up to 100,000 users or 64 MiB.</td></tr>
+      <tr><th>A route is added to the declaration</th><td>It is in <code>/openapi.json</code>. A route that is served and deliberately not documented (the document itself) is declared <code>internal</code>.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="how">
+  <h2>How it works</h2>
+  <p class="sub">The application keeps its loop. <code>web</code> declares, routes, documents and judges parameters: <code>web.dispatch</code> is called in the loop where <code>web.find</code> was, and it is not a callback. A framework that owned the loop would need a handler to be handed a view of buffers it cannot name a region for, which does not type-check in cancho today (<a href="https://github.com/alpibrusl/cancho-web/blob/main/docs/design.md">design §2</a>).</p>
+  <div class="two">
+    <figure class="figure">
+      <svg viewBox="0 0 440 260" role="img" aria-label="At start-up, one declaration of operations produces the router and the OpenAPI document. At run time the application's loop waits, takes a request, finds its route, runs the handler and responds.">
+        <defs><marker id="h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="var(--muted)"/></marker></defs>
+        <rect class="hot" x="6" y="8" width="160" height="96" rx="12"/><text class="t" x="86" y="30" text-anchor="middle">web.operation …</text>
+        <text class="s" x="86" y="52" text-anchor="middle">route · parameters</text><text class="s" x="86" y="70" text-anchor="middle">body · responses</text><text class="s" x="86" y="88" text-anchor="middle">declared once, at start</text>
+        <rect class="box" x="236" y="8" width="198" height="40" rx="8"/><text class="t" x="335" y="33" text-anchor="middle">router · web.find</text>
+        <rect class="box" x="236" y="64" width="198" height="40" rx="8"/><text class="t" x="335" y="89" text-anchor="middle">openapi.json · checked in</text>
+        <path class="ar" d="M166 40C200 40 200 28 234 28" marker-end="url(#h)"/><path class="ar" d="M166 74C200 74 200 84 234 84" marker-end="url(#h)"/>
+        <rect class="box" x="6" y="140" width="428" height="112" rx="12"/><text class="t" x="20" y="162">your loop</text>
+        <rect class="box" x="20" y="176" width="86" height="60" rx="8"/><text class="s" x="63" y="202" text-anchor="middle">server.wait</text><text class="s" x="63" y="220" text-anchor="middle">I/O, once</text>
+        <rect class="box" x="124" y="176" width="86" height="60" rx="8"/><text class="s" x="167" y="202" text-anchor="middle">server.next</text><text class="s" x="167" y="220" text-anchor="middle">one request</text>
+        <rect class="hot" x="228" y="176" width="92" height="60" rx="8"/><text class="s" x="274" y="202" text-anchor="middle">dispatch</text><text class="s" x="274" y="220" text-anchor="middle">then handle</text>
+        <rect class="box" x="338" y="176" width="86" height="60" rx="8"/><text class="s" x="381" y="202" text-anchor="middle">respond</text><text class="s" x="381" y="220" text-anchor="middle">the answer</text>
+        <path class="ar" d="M106 206H122" marker-end="url(#h)"/><path class="ar" d="M210 206H226" marker-end="url(#h)"/><path class="ar" d="M320 206H336" marker-end="url(#h)"/>
+        <path class="ar dash" d="M335 104C335 130 300 150 280 174" marker-end="url(#h)"/>
+      </svg>
+    </figure>
+    <figure class="figure">
+      <h3>The declaration, in code</h3>
+      <pre class="code" tabindex="0" style="margin:0"><code>let (api, op) = web.operation(heap, api,
+    "GET", "/users/:id", "getUser");
+api = web.path_param(heap, api, op, "id", path_id);
+api = web.respond(heap, api, op, 200, "the user", user);
+api = web.respond_problem(heap, api, op, 404);
+api = web.respond_problem(heap, api, op, 422);
+
+// in the loop: the route, with its parameters judged
+let (routed, id) = web.dispatch(heap, api, sc, request,
+    table, params, args, scratch, out, keep);
+if id == web.answered() { return routed; }   // 404, 405, 422
+let id_value = web.int_arg(args, id_slot);   // valid, 1..99</code></pre>
+      <figcaption><code>path_id</code> and <code>user</code> are <code>cancho-schema</code> nodes: the ones that validate are the ones that appear in the document. <code>dispatch</code> keeps nothing and allocates nothing for a request that is fine.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="proof">
+  <h2>We hold it to its own contract.</h2>
+  <p class="sub">The real binary on a real socket, a real HTTP client, and a generator that reads the served OpenAPI document and sends requests the document allows and ones it does not. A response the document does not declare fails the test.</p>
+  <div class="stats">
+    <div><b>27</b><span>end-to-end tests over real sockets, run against the built service</span></div>
+    <div><b>8,447</b><span>requests generated by Schemathesis from the document in the last 500-example run; none failing</span></div>
+    <div><b>byte for byte</b><span>the served document is the checked-in <code>openapi.json</code>, and validates as OpenAPI 3.1</span></div>
+    <div><b>20</b><span>deliberate breakages of <code>dispatch</code> and the code under it, each caught by a test</span></div>
+  </div>
+  <p class="note"><a href="evidence.html">What the tests cover, what they found, and what is not claimed</a></p>
+  <div class="cols">
+    <div><h3>What building it found</h3><ul>
+      <li><code>150.0</code> is an integer in JSON Schema and string length counts code points: both were wrong in <code>cancho-schema</code>, and the schema's own tests had been shaped to agree. Schemathesis disagreed on the first run.</li>
+      <li>A float-spelled integer read as <code>0</code> and would have stored <code>"age": 0</code> silently.</li>
+      <li>No <code>204</code> was possible: <code>http.respond_head</code> always wrote <code>Content-Length</code>. Fixed in cancho.</li>
+      <li>The comparison with Go found the page endpoint at 0.62&times; of it, for two reasons, one in the example and one in cancho&rsquo;s <code>std.buffer</code>. Both fixed.</li>
+    </ul></div>
+    <div><h3>What it disproved</h3><ul>
+      <li>That a framework can own the loop and call a handler: it does not type-check, and the reason was reproduced, not assumed.</li>
+      <li>That a validated value should be validated again on the way out: re-checking the program&rsquo;s own output held the page endpoint to about 40,000 requests a second; splicing it as bytes made it 62,000.</li>
+      <li>That a benchmark number is a measurement because it looks plausible: the load generator once mis-read every response and landed near the right answer.</li>
+    </ul></div>
+  </div>
+</section>
+
+<section id="numbers">
+  <h2>Against FastAPI, Go and C, honestly.</h2>
+  <p class="sub">One core each, loopback, one 4-vCPU VM, one run (the second: <a href="evidence.html#bench">the first is in the evidence</a>), repeats within about 5% (a create up to 10%). Every implementation is first held to do the same work: the same requests, the same statuses and bodies. <strong>It is behind a hand-written C server</strong> on a rejected body and a create (by 6% and 11%) and ahead of it on a read and a page.</p>
+  <div class="two" style="grid-template-columns:1fr">
+    <figure class="figure"><img src="figures/bench.svg" width="700" height="518" alt="Requests per second on one core in four cells. cancho-web is 14 to 18 times FastAPI, ahead of Go net/http in all four, ahead of hand-written C on a read and a page and behind it on the other two."><figcaption>Median of 3, requests a second, the figures of <a href="evidence.html#bench">the table</a>. FastAPI is its best of three set-ups in each column. Against FastAPI a gap of 14&ndash;18&times; says mostly that Python&rsquo;s cost per request is high; the Go and C servers are there so that a number is a position, not only a ratio.</figcaption></figure>
+  </div>
+  <div class="stats">
+    <div><b>14&ndash;18&times;</b><span>FastAPI, one core each (19&ndash;25&times; its two workers, on two cores each)</span></div>
+    <div><b>0.55 ms</b><span>p99 on a read (FastAPI: 10.8 ms)</span></div>
+    <div><b>1.3&ndash;1.4&times;</b><span>Go <code>net/http</code>, with two thirds of its p99</span></div>
+    <div><b>92%</b><span>of what one core can do over loopback TCP (a server that answers one canned reply)</span></div>
+  </div>
+  <div class="stats">
+    <div><b>1.8 MiB</b><span>resident at rest, 2.0 MiB with 100 idle connections (FastAPI: 47 MiB; Go: 7&ndash;12 MiB)</span></div>
+    <div><b>4 ms</b><span>to the first answer (FastAPI: about half a second)</span></div>
+  </div>
+  <p class="note">None of this measures TLS or a real handler&rsquo;s work. Two cores each are in <a href="evidence.html#cores">the evidence</a>: the gap with FastAPI narrows to 19&ndash;25&times; and does not close. A first run, on a faster VM, had 15&ndash;26&times;: against a Python program the ratio depends on the machine. A service that spends 5 ms in a query is 5 ms slower in all of them.</p>
+</section>
+
+<section id="fit">
+  <h2>Where it fits</h2>
+  <p class="sub">For a JSON API whose contract you want to be a file that CI checks, on a service that has to be small and auditable. Not yet for the public edge, and not where you need what FastAPI&rsquo;s ecosystem gives.</p>
+  <div class="fitwrap"><table class="fit wide">
+    <thead><tr><th></th><th>You write</th><th>You get</th><th>You give up</th></tr></thead>
+    <tbody>
+      <tr class="us"><th>cancho-web</th><td>An operation declaration, a handler that matches on the route id, your own loop</td><td>A contract that cannot drift from the routes, parameters and bodies judged by the nodes that document them, every error at once, one thread, a report of what the program can touch</td><td>Dependency injection, middleware, <code>async</code>, a docs UI, defaults declared once, for now; TLS and threads exist in cancho but nothing here has been built on them</td></tr>
+      <tr><th>FastAPI</th><td>Decorated functions and pydantic models</td><td>Dependency injection, <code>async</code>, <code>/docs</code>, a large ecosystem</td><td>An order of magnitude of per-core speed in this test; a checked statement of what the program can do</td></tr>
+    </tbody>
+  </table></div>
+  <div class="cols">
+    <div><h3>Built for</h3><ul><li>JSON APIs behind a TLS-terminating front</li><li>A contract you want diffed in review</li><li>Services where &ldquo;what can it touch?&rdquo; has to have an answer</li></ul></div>
+    <div class="no"><h3>Not for</h3><ul><li>The public edge, until a service is put behind cancho&rsquo;s TLS server (it exists; this layer has not been tried with it)</li><li>Anything that needs authentication, middleware or dependency injection today</li><li>Streaming bodies, or a store shared between threads</li></ul></div>
+  </div>
+</section>
+
+<section id="features">
+  <h2>What you get</h2>
+  <div class="grid">
+    <div><h3>Operations</h3><p>Method, path pattern, an operation id; the route id is what the handler tests.</p></div>
+    <div><h3>Typed parameters</h3><p>Path, query and header parameters with a schema node each, written to the document <em>and</em> checked by <code>dispatch</code> before the handler runs. Values arrive in a slot table, already valid.</p></div>
+    <div><h3>Validated bodies</h3><p><code>cancho-schema</code>: every error, a JSON Pointer each, strict objects, string length in code points.</p></div>
+    <div><h3>problem+json</h3><p>RFC 9457, with <code>errors</code> and <code>count</code> for a body, and a named <code>Problem</code> component in the document.</p></div>
+    <div><h3>OpenAPI 3.1</h3><p>Generated at start-up, checked against a stock validator, diffed in CI. Components, shared path parameters, response headers, plain-text answers.</p></div>
+    <div><h3>Who may call</h3><p>Bearer schemes and <code>require</code> / <code>no_auth</code> are declared and readable back. Nothing here checks a token.</p></div>
+    <div><h3>A package</h3><p><code>web</code> is published as a store, so a project names it in <code>cancho.toml</code> instead of copying a file.</p></div>
+    <div><h3>PostgreSQL</h3><p><code>examples/users_pg</code> is the same API on a table, same document, same tests; optionally a pool so a slow query does not stop the loop.</p></div>
+  </div>
+</section>
+
+<section id="start">
+  <h2>Try it</h2>
+  <p class="sub">Build the pinned compiler and the two packages, then the example:</p>
+  <pre class="code" tabindex="0"><code>git clone https://github.com/alpibrusl/cancho
+git clone https://github.com/alpibrusl/cancho-schema
+git clone https://github.com/alpibrusl/cancho-web &amp;&amp; cd cancho-web
+pin() { sed -n "s/^ *$1: *//p" .github/workflows/ci.yml; }
+(cd ../cancho &amp;&amp; git checkout "$(pin CANCHO_REV)" &amp;&amp; cargo build --release -p cancho)
+(cd ../cancho-schema &amp;&amp; git checkout "$(pin SCHEMA_REV)")
+export CANCHO=$PWD/../cancho/target/release/cancho
+
+scripts/build.sh examples/users/users.cho build/users
+build/users 8080 &amp;
+curl -s -XPOST -H 'Content-Type: application/json' -d '{"name":"Ada","age":36}' localhost:8080/users</code></pre>
+  <p class="note">Building needs Rust (the compiler pins its own toolchain). The packages are fetched and checked against <code>deps/*.lock</code> by hash every time. <a href="examples.html#run">The examples page</a> goes further; the <a href="https://github.com/alpibrusl/cancho-web#readme">README</a> has the rest.</p>
+</section>
+
+<section id="cancho">
+  <h2>Built in cancho</h2>
+  <p class="sub">cancho is a typed systems language whose compiler writes down what a program may do. For a service that is the point: the built binary&rsquo;s report is a list, and C is not on it.</p>
+  <div class="fitwrap"><table class="fit">
+    <thead><tr><th>The users service&rsquo;s report</th><td></td></tr></thead>
+    <tbody>
+      <tr><th>Foreign calls</th><td class="good">none (no <code>ffi</code>, no <code>extern fn</code>)</td></tr>
+      <tr><th>Files</th><td class="good">none</td></tr>
+      <tr><th>Everything else</th><td><code>args, clock, conn_*, heap, net_in, poll</code> and the console&rsquo;s error stream</td></tr>
+      <tr><th>With PostgreSQL</th><td>the network, and one random-file read for the login; nothing foreign</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">One thread, a <code>Poller</code>. More cores are more processes (<code>reuseport</code>) or, in <code>examples/users_threads</code>, the same loop in two threads of one process (cancho has threads; that example shares no state, so it is not a deployable service).</p>
+</section>
+
+<aside class="status" id="status">
+  <h2>Alpha: the declaration half is built</h2>
+  <p class="note" style="margin:.2rem 0 .6rem">Alpha means the interfaces may change and nothing here is certified for production.</p>
+  <ul>
+    <li><strong>Not built yet:</strong> defaults declared once (a handler still says what <code>limit</code> is when it is absent), and <code>dispatch</code> in the PostgreSQL and threads examples, which keep <code>web.find</code> and their own checks. <a href="https://github.com/alpibrusl/cancho-web/blob/main/docs/design.md">§9</a> says what <code>dispatch</code> does, what building it found, and what it cost: a read 1.5% slower, a refused parameter 10%.</li>
+    <li><strong>No middleware, authentication or dependency injection</strong>; nothing checks a token.</li>
+    <li><strong>TLS, threads and streaming exist in cancho and are not used here.</strong> cancho has a TLS 1.3 server (not independently reviewed) and an <code>http.server</code> that a terminator can drive (<code>examples/https_hello</code>); no service in this repository has been put behind it, so terminate TLS in front. Threads run the loop twice in <code>examples/users_threads</code>, with a store each; a store they share is not built. <code>http.server</code> can stream a response; <code>web</code> cannot declare one yet.</li>
+    <li>Responses are documented, not enforced: nothing checks that a handler answered what it declared. The contract tests do, from outside, for every request. A request <em>body</em> is still read by the handler (validated, but not by <code>dispatch</code>).</li>
+    <li>The generated JSON Schema has no <code>$ref</code>/<code>$defs</code> of its own.</li>
+    <li>The benchmark is one VM, one run. The ratios are the finding; the absolute figures are that VM&rsquo;s.</li>
+  </ul>
+  <p style="margin:.8rem 0 0"><a href="evidence.html">The evidence</a> · <a href="https://github.com/alpibrusl/cancho-web/blob/main/docs/design.md">The design</a> · <a href="https://github.com/alpibrusl/cancho-web/blob/main/docs/benchmarks.md">The benchmarks</a></p>
+</aside>
+
+</main>
+
+<footer><div class="wrap">
+  <a href="https://github.com/alpibrusl/cancho-web">Repository</a><a href="evidence.html">Evidence</a><a href="examples.html">Examples</a>
+  <a href="https://github.com/alpibrusl/cancho-web/blob/main/docs/design.md">Design</a><a href="https://github.com/alpibrusl/cancho-web/blob/main/docs/benchmarks.md">Benchmarks</a>
+  <a href="https://github.com/alpibrusl/cancho-schema">cancho-schema</a><a href="https://github.com/alpibrusl/cancho">cancho</a>
+  <span>Alpha · EUPL-1.2</span>
+</div></footer>
+</body>
+</html>

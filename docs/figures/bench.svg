@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 518" role="img" aria-label="Requests per second on one core in four cells, fastest first. cancho-web is far ahead of FastAPI in all four, ahead of Go net/http in all four, ahead of a hand-written C server on a read and a page and behind it on the rejected body and the create.">
+<style>
+.t{fill:#14171c;font:600 13px system-ui,sans-serif}.s{fill:#5b6573;font:12px system-ui,sans-serif}.v{fill:#14171c;font:600 12px system-ui,sans-serif}.v,.s{paint-order:stroke;stroke:#fbfbfc;stroke-width:4px;stroke-linejoin:round}
+.a{fill:#265e8d}.b{fill:#a89f8f}
+@media (prefers-color-scheme:dark){.v,.s{stroke:#0d1217}.t,.v{fill:#e8eaee}.s{fill:#9ba5b3}.a{fill:#6fa3d6}.b{fill:#8c8576}}
+</style>
+<text class="t" x="0" y="16">Requests per second, one core each, higher is better (median of 3, one run)</text>
+<text class="t" x="0" y="44">GET one user</text>
+<text class="t" x="102" y="66" text-anchor="end">cancho-web</text>
+<rect class="a" x="110" y="54" width="450.0" height="15" rx="2"/>
+<text class="v" x="566.0" y="66">83,289</text>
+<text class="s" x="102" y="85" text-anchor="end">hand-written C</text>
+<rect class="b" x="110" y="73" width="409.2" height="15" rx="2"/>
+<text class="v" x="525.2" y="85">75,734</text>
+<text class="s" x="102" y="104" text-anchor="end">Go net/http</text>
+<rect class="b" x="110" y="92" width="352.4" height="15" rx="2"/>
+<text class="v" x="468.4" y="104">65,216</text>
+<text class="s" x="102" y="123" text-anchor="end">FastAPI</text>
+<rect class="b" x="110" y="111" width="26.6" height="15" rx="2"/>
+<text class="v" x="142.6" y="123">4,921</text>
+<text class="t" x="0" y="168">a page of 20</text>
+<text class="t" x="102" y="190" text-anchor="end">cancho-web</text>
+<rect class="a" x="110" y="178" width="450.0" height="15" rx="2"/>
+<text class="v" x="566.0" y="190">75,286</text>
+<text class="s" x="102" y="209" text-anchor="end">hand-written C</text>
+<rect class="b" x="110" y="197" width="407.3" height="15" rx="2"/>
+<text class="v" x="523.3" y="209">68,144</text>
+<text class="s" x="102" y="228" text-anchor="end">Go net/http</text>
+<rect class="b" x="110" y="216" width="321.5" height="15" rx="2"/>
+<text class="v" x="437.5" y="228">53,792</text>
+<text class="s" x="102" y="247" text-anchor="end">FastAPI</text>
+<rect class="b" x="110" y="235" width="25.7" height="15" rx="2"/>
+<text class="v" x="141.7" y="247">4,307</text>
+<text class="t" x="0" y="292">rejected body (422)</text>
+<text class="s" x="102" y="314" text-anchor="end">hand-written C</text>
+<rect class="b" x="110" y="302" width="450.0" height="15" rx="2"/>
+<text class="v" x="566.0" y="314">67,376</text>
+<text class="t" x="102" y="333" text-anchor="end">cancho-web</text>
+<rect class="a" x="110" y="321" width="422.4" height="15" rx="2"/>
+<text class="v" x="538.4" y="333">63,241</text>
+<text class="s" x="102" y="352" text-anchor="end">Go net/http</text>
+<rect class="b" x="110" y="340" width="314.0" height="15" rx="2"/>
+<text class="v" x="430.0" y="352">47,011</text>
+<text class="s" x="102" y="371" text-anchor="end">FastAPI</text>
+<rect class="b" x="110" y="359" width="23.6" height="15" rx="2"/>
+<text class="v" x="139.6" y="371">3,536</text>
+<text class="t" x="0" y="416">create</text>
+<text class="s" x="102" y="438" text-anchor="end">hand-written C</text>
+<rect class="b" x="110" y="426" width="450.0" height="15" rx="2"/>
+<text class="v" x="566.0" y="438">60,719</text>
+<text class="t" x="102" y="457" text-anchor="end">cancho-web</text>
+<rect class="a" x="110" y="445" width="398.4" height="15" rx="2"/>
+<text class="v" x="514.4" y="457">53,755</text>
+<text class="s" x="102" y="476" text-anchor="end">Go net/http</text>
+<rect class="b" x="110" y="464" width="304.2" height="15" rx="2"/>
+<text class="v" x="420.2" y="476">41,051</text>
+<text class="s" x="102" y="495" text-anchor="end">FastAPI</text>
+<rect class="b" x="110" y="483" width="29.3" height="15" rx="2"/>
+<text class="v" x="145.3" y="495">3,948</text>
+</svg>
