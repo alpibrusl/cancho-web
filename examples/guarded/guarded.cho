@@ -1,0 +1,261 @@
+edition 5;
+
+// `guarded` -- who may call, declared once and enforced: the example for `web.guard` and `web.log_line`
+// (`docs/design.md` section 11).
+//
+//     guarded <port> <admin-token> <ingest-token>
+//
+//     GET  /health          open (`no_auth`)
+//     GET  /report          the `admin` scheme
+//     POST /events          the `ingest` scheme or the `admin` scheme (either will do)
+//     GET  /openapi.json    open; the document says the same
+//
+// The tokens are on the command line so that the example is one file; a command line is visible to
+// other users of the machine (`ps`), so a service that matters reads them some other way. Each request
+// is logged to stderr as `METHOD path status milliseconds` -- the query string is left out.
+//
+// Authority (`cancho authority`): `net_in`, `conn_*`, `poll`, `clock`, `heap`, `args`, `err_write` and
+// no `ffi` and no file. A service that could read a token file would show `fs_read` there.
+
+import std.buffer;
+import std.bytes;
+import std.http;
+import std.io;
+import std.json;
+import std.route;
+import std.vec;
+import http.server;
+import schema;
+import web;
+
+// A decimal number, or -1 for empty text, a non-digit, or more than 17 digits.
+fn number_of[&t](text: &t [byte]) -> [] int {
+    if len(text) == 0 || len(text) > 17 {
+        return 0 - 1;
+    }
+    var n = 0;
+    var i = 0;
+    while i < len(text) {
+        let c = int_of(text[i]);
+        if c < 48 || c > 57 {
+            return 0 - 1;
+        }
+        n = n * 10 + (c - 48);
+        i = i + 1;
+    }
+    return n;
+}
+
+fn setup[&h](heap: &!h Heap) -> [heap] (schema.Schema, web.Api, buffer.Buffer) {
+    var s = schema.empty(heap);
+    let (s1, alive) = schema.new_bool(heap, s);
+    let (s2, health) = schema.new_object(heap, s1, true);
+    s = schema.add_field(heap, s2, health, "ok", alive, true);
+    let (s3, text) = schema.new_string(heap, s, 0, schema.int_max());
+    let (s4, report) = schema.new_object(heap, s3, true);
+    s = schema.add_field(heap, s4, report, "report", text, true);
+    let (s5, accepted) = schema.new_object(heap, s, true);
+    s = schema.add_field(heap, s5, accepted, "accepted", alive, true);
+
+    var api = web.empty(heap);
+    api = web.bearer_scheme(heap, api, "admin", "may read the report and send events");
+    api = web.bearer_scheme(heap, api, "ingest", "may send events");
+
+    let (a1, op_health) = web.operation(heap, api, "GET", "/health", "health");
+    api = web.no_auth(heap, a1, op_health);
+    api = web.respond(heap, api, op_health, 200, "alive", health);
+
+    let (a2, op_report) = web.operation(heap, api, "GET", "/report", "report");
+    api = web.require(heap, a2, op_report, "admin");
+    api = web.respond(heap, api, op_report, 200, "the report", report);
+    api = web.respond_problem(heap, api, op_report, 401);
+    api = web.respond_problem(heap, api, op_report, 403);
+
+    let (a3, op_events) = web.operation(heap, api, "POST", "/events", "sendEvent");
+    api = web.require(heap, a3, op_events, "ingest");
+    api = web.require(heap, api, op_events, "admin");
+    api = web.respond(heap, api, op_events, 202, "accepted", accepted);
+    api = web.respond_problem(heap, api, op_events, 401);
+    api = web.respond_problem(heap, api, op_events, 403);
+
+    let (a4, op_doc) = web.internal(heap, api, "GET", "/openapi.json");
+    api = a4;
+
+    let (s6, text2) = schema.new_string(heap, s, 0, schema.int_max());
+    let (s7, status) = schema.new_int(heap, s6, 100, 599);
+    let (s8, problem) = schema.new_object(heap, s7, true);
+    s = schema.add_field(heap, s8, problem, "type", text2, true);
+    s = schema.add_field(heap, s, problem, "title", text2, true);
+    s = schema.add_field(heap, s, problem, "status", status, true);
+    s = schema.add_field(heap, s, problem, "detail", text2, false);
+    api = web.component(heap, api, "Problem", problem);
+
+    var doc = buffer.empty(heap, 16);
+    borrow api as &ar in {
+        borrow s as &sr in {
+            buffer.drop(heap, doc);
+            doc = web.openapi(heap, ar, sr, "Guarded API", "1.0.0");
+        }
+    }
+    return (s, api, doc);
+}
+
+// One parsed request in, one response appended to `out`: `dispatch`, then `guard`, then the work.
+fn handle[&h, &r, &sc, &k, &d, &q, &t, &p, &g, &x](heap: &!h Heap, api: &r web.Api, sc: &sc schema.Schema, tokens: &k web.Tokens, doc: &d [byte], request: &q [byte], table: &t [int], params: &!p [int], args: &!g [int], scratch: &!x [byte], out: buffer.Buffer) -> [heap] buffer.Buffer {
+    let keep = http.keeps_alive(table);
+    let (routed, id) = web.dispatch(heap, api, sc, request, table, params, args, scratch, out, keep);
+    if id == web.answered() {
+        return routed;
+    }
+    let (gated, allowed) = web.guard(heap, api, tokens, request, table, id, routed, keep);
+    if !allowed {
+        return gated;
+    }
+    if id == 1 {
+        return server.reply(heap, gated, 200, "{\"ok\":true}", keep);
+    }
+    if id == 2 {
+        return server.reply(heap, gated, 200, "{\"report\":\"all quiet\"}", keep);
+    }
+    if id == 3 {
+        return server.reply(heap, gated, 202, "{\"accepted\":true}", keep);
+    }
+    if id == 4 {
+        return server.reply(heap, gated, 200, doc, keep);
+    }
+    return server.reply(heap, gated, 404, "{\"title\":\"Not Found\"}", keep);
+}
+
+fn run[&h, &k, &l, &i, &a, &b](heap: &!h Heap, clock: &k Clock, listener: &!l Listener, con: &!i Io, admin: &a [byte], ingest: &b [byte]) -> [heap, conn_accept, conn_read, conn_write, poll, clock, err_write] int {
+    match poller_new() {
+        Polling::Ok(p) => {
+            var srv = server.open(heap, p, listener, 16384, 0, 9);
+            let (sc, api, doc) = setup(heap);
+            var tokens = web.tokens_empty(heap);
+            tokens = web.token(heap, tokens, "admin", admin);
+            tokens = web.token(heap, tokens, "ingest", ingest);
+            var widest = 1;
+            borrow api as &ar in {
+                if web.most_params(ar) > 1 {
+                    widest = web.most_params(ar);
+                }
+            }
+            let params = box_slice(heap, 2 * widest, 0);
+            var wide = 2;
+            borrow api as &ar in {
+                wide = web.most_args(ar);
+            }
+            let args = box_slice(heap, wide, 0);
+            let scratch = box_slice(heap, 256, byte_of(0));
+            var out = buffer.empty(heap, 4096);
+            while true {
+                srv = server.wait(heap, srv, clock, listener, 1000);
+                var more = true;
+                while more {
+                    var slot = 0 - 1;
+                    borrow mut srv as &!sw in {
+                        slot = server.next(heap, sw);
+                    }
+                    if slot < 0 {
+                        more = false;
+                    } else {
+                        borrow mut out as &!ob in {
+                            buffer.clear(ob);
+                        }
+                        let started = clock_ms(clock);
+                        borrow srv as &sr in {
+                            borrow mut params as &!pw in {
+                                borrow mut args as &!aw in {
+                                    borrow mut scratch as &!cw in {
+                                        borrow api as &ar in {
+                                            borrow sc as &scr in {
+                                                borrow tokens as &tr in {
+                                                    borrow doc as &dr in {
+                                                        out = handle(heap, ar, scr, tr, buffer.bytes(dr), server.head(sr), server.parsed(sr), contents(pw), contents(aw), contents(cw), out);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            borrow out as &ob in {
+                                let line = web.log_line(heap, server.head(sr), server.parsed(sr), buffer.bytes(ob), clock_ms(clock) - started);
+                                borrow line as &lb in {
+                                    io.error_all(con, buffer.bytes(lb));
+                                }
+                                buffer.drop(heap, line);
+                            }
+                        }
+                        borrow mut srv as &!sw in {
+                            borrow out as &ob in {
+                                server.respond(sw, buffer.bytes(ob));
+                            }
+                        }
+                    }
+                }
+            }
+            server.close(heap, srv);
+            buffer.drop(heap, out);
+            buffer.drop(heap, doc);
+            web.tokens_drop(heap, tokens);
+            web.drop(heap, api);
+            schema.drop(heap, sc);
+            unbox_slice(heap, scratch);
+            unbox_slice(heap, args);
+            unbox_slice(heap, params);
+            return 0;
+        }
+        Polling::Failed(e) => {
+            return 4;
+        }
+    }
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock } = split(world);
+    release(fs);
+    release(ffi);
+    var status = 2;
+    borrow args as &g in {
+        if arg_count(g) > 3 && len(arg(g, 2)) > 0 && len(arg(g, 3)) > 0 {
+            let port = number_of(arg(g, 1));
+            if port > 0 && port < 65536 {
+                status = 3;
+                borrow net as &nn in {
+                    match tcp_listen(nn, port, 1024, 0) {
+                        Listening::Ok(l) => {
+                            var listener = l;
+                            borrow mut listener as &!lh in {
+                                listener_nonblocking(lh);
+                                borrow mut heap as &!h in {
+                                    borrow mut io as &!i in {
+                                        var line = buffer.append(h, buffer.empty(h, 64), "listening on ");
+                                        line = buffer.push_nat(h, line, port);
+                                        line = buffer.push(h, line, byte_of(10));
+                                        borrow line as &lb in {
+                                            io.error_all(i, buffer.bytes(lb));
+                                        }
+                                        buffer.drop(h, line);
+                                        borrow clock as &c in {
+                                            status = run(h, c, lh, i, arg(g, 2), arg(g, 3));
+                                        }
+                                    }
+                                }
+                            }
+                            listener_close(listener);
+                        }
+                        Listening::Failed(e) => {
+                        }
+                    }
+                }
+            }
+        }
+    }
+    release(net);
+    release(clock);
+    release(args);
+    release(io);
+    release(heap);
+    return status;
+}

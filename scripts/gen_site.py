@@ -101,7 +101,7 @@ index = head(
 <div class="hero" id="top">
   <div>
     <img class="logo" src="logo.png" alt="cancho web: a rock caught in a web, in front of a blue circle" width="176" height="176">
-    <a class="badge" href="#status"><i></i>Alpha · declaration and parameter dispatch are built; middleware is not</a>
+    <a class="badge" href="#status"><i></i>Alpha · declaration, parameter dispatch and bearer authorization are built; dependency injection is not</a>
     <h1>Declare the API once.</h1>
     <p class="lead">cancho-web makes the API boundary a checked artifact of the program. One declaration defines the route, checks its inputs, generates the OpenAPI document, and is what CI tests. <strong>Write it once. Serve it. Document it. Test it.</strong></p>
     <div class="cta"><a class="btn primary" href="examples.html#run">Run it</a><a class="btn ghost" href="examples.html">Examples</a><a class="btn ghost" href="#proof">See the evidence</a></div>
@@ -258,10 +258,10 @@ let id_value = web.int_arg(args, id_slot);   // valid, 1..99</code></pre>
       <tr><th>A read on one core, this VM</th><td>4,921 a second</td><td>65,216</td><td>83,289</td></tr>
     </tbody>
   </table></div>
-  <p class="note">FastAPI also generates its document from its declarations, so the difference is not that the others drift. It is that here the declaration is data and not reflection, the document is a file CI compares, and the compiler says what the program behind it can reach. What you give up: dependency injection, middleware, <code>async</code>, authentication, a docs UI, defaults declared once, and an ecosystem. One thread, a <code>Poller</code>: more cores are more processes (<code>reuseport</code>) or, in <code>examples/users_threads</code>, the same loop in two threads (cancho has threads; that example shares no state, so it is not a deployable service).</p>
+  <p class="note">FastAPI also generates its document from its declarations, so the difference is not that the others drift. It is that here the declaration is data and not reflection, the document is a file CI compares, and the compiler says what the program behind it can reach. What you give up: dependency injection, <code>async</code>, OAuth and sessions, a docs UI, defaults declared once, and an ecosystem. Bearer-token authorization and an access-log line are here (<code>web.guard</code>, <code>web.log_line</code>); a request id, CORS and rate limiting are for the application. One thread, a <code>Poller</code>: more cores are more processes (<code>reuseport</code>) or, in <code>examples/users_threads</code>, the same loop in two threads (cancho has threads; that example shares no state, so it is not a deployable service).</p>
   <div class="cols">
     <div><h3>Built for</h3><ul><li>JSON APIs behind a TLS-terminating front</li><li>A contract you want diffed in review</li><li>Services where &ldquo;what can it touch?&rdquo; has to have an answer</li></ul></div>
-    <div class="no"><h3>Not for</h3><ul><li>The public edge, until a service is put behind cancho&rsquo;s TLS server (it exists; this layer has not been tried with it)</li><li>Anything that needs authentication, middleware or dependency injection today</li><li>Streaming bodies, or a store shared between threads</li></ul></div>
+    <div class="no"><h3>Not for</h3><ul><li>The public edge, until a service is put behind cancho&rsquo;s TLS server (it exists; this layer has not been tried with it)</li><li>Anything that needs OAuth, sessions or dependency injection today</li><li>Streaming bodies, or a store shared between threads</li></ul></div>
   </div>
 </section>
 
@@ -293,7 +293,7 @@ let id_value = web.int_arg(args, id_slot);   // valid, 1..99</code></pre>
     <div><h3>Validated bodies</h3><p><code>cancho-schema</code>: every error, a JSON Pointer each, strict objects, string length in code points.</p></div>
     <div><h3>problem+json</h3><p>RFC 9457, with <code>errors</code> and <code>count</code> for a body, and a named <code>Problem</code> component in the document.</p></div>
     <div><h3>OpenAPI 3.1</h3><p>Generated at start-up, checked against a stock validator, diffed in CI. Components, shared path parameters, response headers, plain-text answers.</p></div>
-    <div><h3>Who may call</h3><p>Bearer schemes and <code>require</code> / <code>no_auth</code> are declared and readable back. Nothing here checks a token.</p></div>
+    <div><h3>Who may call</h3><p>Bearer schemes and <code>require</code> / <code>no_auth</code> are declared, written to the document, and enforced by <code>web.guard</code>: 401, 403 or through. The tokens are data.</p></div>
     <div><h3>A package</h3><p><code>web</code> is published as a store, so a project names it in <code>cancho.toml</code> instead of copying a file.</p></div>
     <div><h3>PostgreSQL</h3><p><code>examples/users_pg</code> is the same API on a table, same document, same tests; optionally a pool so a slow query does not stop the loop.</p></div>
   </div>
@@ -321,7 +321,7 @@ curl -s -XPOST -H 'Content-Type: application/json' -d '{{"name":"Ada","age":36}}
   <p class="note" style="margin:.2rem 0 .6rem">Alpha means the interfaces may change and nothing here is certified for production.</p>
   <ul>
     <li><strong>Not built yet:</strong> defaults declared once (a handler still says what <code>limit</code> is when it is absent). <code>dispatch</code> is in all three services (<code>users</code>, <code>users_pg</code>, <code>users_threads</code>). <a href="{REPO}/blob/main/docs/design.md">§9</a> says what <code>dispatch</code> does, what building it found, and what it cost: a read 1.5% slower, a refused parameter 10%.</li>
-    <li><strong>No middleware, authentication or dependency injection</strong>; nothing checks a token.</li>
+    <li><strong>No dependency injection, OAuth, sessions, token expiry, request id, CORS or rate limiting.</strong> <code>web.guard</code> checks bearer secrets from a table the application hands over, and <code>web.log_line</code> formats an access-log line; middleware is a call the application makes in an order it can read (<a href="{REPO}/blob/main/docs/design.md">§11</a>). <code>users</code>, <code>users_pg</code> and <code>users_threads</code> declare no security; <code>examples/guarded</code> does.</li>
     <li><strong>TLS, threads and streaming exist in cancho and are not used here.</strong> cancho has a TLS 1.3 server (not independently reviewed) and an <code>http.server</code> that a terminator can drive (<code>examples/https_hello</code>); no service in this repository has been put behind it, so terminate TLS in front. Threads run the loop twice in <code>examples/users_threads</code>, with a store each; a store they share is not built. <code>http.server</code> can stream a response; <code>web</code> cannot declare one yet.</li>
     <li>Responses are documented, not enforced: nothing checks that a handler answered what it declared. The contract tests do, from outside, for every request. A request <em>body</em> is still read by the handler (validated, but not by <code>dispatch</code>).</li>
     <li>The generated JSON Schema has no <code>$ref</code>/<code>$defs</code> of its own.</li>
@@ -444,7 +444,7 @@ Content-Type: application/problem+json
   <p class="sub">The document is generated from the same declaration that makes the router and the same schema nodes the validator runs, and it is checked in as <a href="@@REPO@@/blob/main/examples/users/openapi.json"><code>examples/users/openapi.json</code></a>. An end-to-end test compares what the service serves with that file byte for byte, so a change to the API is a change to a file in review.</p>
   <pre class="code" tabindex="0"><code>$ curl -s localhost:8080/openapi.json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["openapi"], sorted(d["paths"]))'
 3.1.0 ['/health', '/users', '/users/{id}']</code></pre>
-  <p class="sub" style="margin-top:1.2rem">Who may call an operation is declared the same way, and only the document is affected (the application&rsquo;s own gate still decides): <code>web.bearer_scheme</code>, then <code>web.require</code> once for each token that will do, <code>web.no_auth</code> for an open route. <code>web.requirements</code>, <code>web.requirement</code> and <code>web.is_open</code> read it back, so a gate need not keep a second table.</p>
+  <p class="sub" style="margin-top:1.2rem">Who may call an operation is declared the same way: <code>web.bearer_scheme</code>, then <code>web.require</code> once for each token that will do, <code>web.no_auth</code> for an open route. <code>web.guard</code>, called after <code>dispatch</code> and before the handler, checks a request against exactly that: no bearer credential or an unknown secret is a 401, a secret held for another scheme is a 403, any one alternative opens the operation. The tokens are a table the application hands over (<code>web.token</code>), not a callback. <code>web.requirements</code>, <code>web.requirement</code> and <code>web.is_open</code> still read the declaration back for a service that wants its own gate.</p>
 </section>
 
 <section id="postgres">
@@ -462,7 +462,7 @@ build/users_pg 8080 127.0.0.1 5432 postgres users_pg - - 4     # ... &lt;passwor
 <section id="not">
   <h2>What these cases do not cover yet</h2>
   <div class="cols">
-    <div class="no"><h3>Not built</h3><ul><li>Defaults declared once (the handler still says what <code>limit</code> is when it is absent)</li><li>Middleware, authentication, dependency injection</li><li>TLS (cancho has a server and an <code>https_hello</code> example; none of these services has been put behind it), streaming a response</li></ul></div>
+    <div class="no"><h3>Not built</h3><ul><li>Defaults declared once (the handler still says what <code>limit</code> is when it is absent)</li><li>OAuth, sessions, dependency injection, a request id, CORS, rate limiting</li><li>TLS (cancho has a server and an <code>https_hello</code> example; none of these services has been put behind it), streaming a response</li></ul></div>
     <div class="no"><h3>Not shown here</h3><ul><li>More than one core in one process beyond the two-thread example, which keeps a store per thread</li><li>A service that is not the users API: <a href="https://github.com/alpibrusl/cancho-hooks">cancho-hooks</a> declares its API with <code>web</code> (<code>src/api.cho</code>), and its router and document are made from that declaration</li></ul></div>
   </div>
 </section>
@@ -759,7 +759,7 @@ evidence = head(
   <div class="cols">
     <div class="no"><h3>Not built</h3><ul>
       <li>Defaults declared once.</li>
-      <li>Middleware, authentication, dependency injection.</li>
+      <li>OAuth, sessions, dependency injection, a request id, CORS, rate limiting.</li>
       <li>TLS (cancho has a server, <code>examples/https_hello</code>, not independently reviewed; no service here has been put behind it), streaming a response, a store shared between threads (the two threads of <code>users_threads</code> share nothing).</li>
       <li><code>$ref</code>/<code>$defs</code> in the generated JSON Schema.</li>
     </ul></div>

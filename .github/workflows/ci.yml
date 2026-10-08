@@ -138,7 +138,19 @@ jobs:
         working-directory: web
         env:
           CANCHO: ${{ github.workspace }}/cancho/target/release/cancho
-        run: scripts/check-authority.sh
+        run: |
+          scripts/check-authority.sh
+          EXAMPLE=guarded scripts/check-authority.sh
+
+      # `web.guard` and `web.log_line` on a real socket: examples/guarded (docs/design.md section 11).
+      - name: The guarded example
+        working-directory: web
+        env:
+          CANCHO: ${{ github.workspace }}/cancho/target/release/cancho
+          CANCHO_DIR: ${{ github.workspace }}/cancho
+          SCHEMA_DIR: ${{ github.workspace }}/cancho-schema
+          PG_DIR: ${{ github.workspace }}/cancho-pg
+        run: python3 tests/guarded_e2e.py
 
       # `web` as a package: the committed store is what `src/web.cho` publishes.
       - name: The package store is the published source

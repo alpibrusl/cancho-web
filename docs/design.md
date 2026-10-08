@@ -450,3 +450,139 @@ and the check that the slot API is not shaped to one example.
   smoke-tested by hand (health, a refused `limit`, an unknown query key, a bad `id`, a 405, a 404, a create, and its served document equal
   to `users`'s). The suites assert a status and the contract, not a sentence; the sentences now agree by construction. The one
   difference left in `users_pg`: it learns a parameter's slot with `web.slot` on each request, not once at start-up as `users` does.
+
+## 10. What `cancho` has now that this layer has not been tried with
+
+(Written 2026-10-08. §2, §6 and the table of §1 pointed here before this section existed; the claims were taken from the README, which
+had been corrected first.)
+
+* **TLS.** `cancho` has a TLS 1.3 server (`packages/tls`; its own notes say it has not been independently reviewed) and `http.server`
+  can be driven by bytes instead of sockets, which is how its `examples/https_hello` serves HTTPS. The loop here is the application's
+  own, so nothing in `web` stands in the way, but no service in this repository has been put behind it: no example, no test, no
+  measurement. Terminate TLS in front.
+* **More than one core.** `spawn` and `join`. `examples/users_threads` runs the unchanged loop in two threads (one heap and one clock
+  each, one `SO_REUSEPORT` listener). Each thread keeps its own store, so it is not a deployable service: a store the threads share
+  is not built.
+* **Streaming.** `http.server` can stream a response; `web` cannot declare one. A request body is read whole (a 413 past its buffer).
+
+## 11. Middleware and who may call
+
+Status: **built** (`web.guard`, `web.bearer`, `web.unauthorized`, `web.forbidden`, `web.Tokens`, `web.log_line`; `examples/guarded`). §11.9 says what was shown and what building it changed. As in §9, a sentence that turned out false is corrected where it was written.
+
+### 11.1 What is asked for, and what is already there
+
+`web` can *say* who may call an operation (§8: `bearer_scheme`, `require`, `no_auth`, `default_require`, read back with `requirements`,
+`requirement`, `is_open`). The document says it; nothing enforces it, and a service keeps its own gate. That is the gap. It is the
+same gap §9 closed for parameters: a thing declared once and checked by hand elsewhere, with nothing to stop the two disagreeing.
+
+"Middleware" is the second ask. §3 already decided what it is here: a function the application calls, in an order it can read, around
+the handler. There is no registry and no chain, because a chain of function values hits §2's wall (no closures: a handler cannot be
+handed to a layer that calls it later). This section decides what the layer *supplies* in that shape.
+
+### 11.2 Decision: the document is the policy, and `web.guard` enforces exactly it
+
+A caller of `GET /admin/x` needs one of the alternatives the document lists for it. `web.guard` is the check of that sentence and no
+other:
+
+    let (routed, id) = web.dispatch(heap, api, sc, request, table, params, args, scratch, out, keep);
+    if id == web.answered() { return routed; }
+    let (gated, allowed) = web.guard(heap, api, tokens, request, table, id, routed, keep);
+    if !allowed { return gated; }
+    ...handler...
+
+* What is enforced is what `/openapi.json` says. An operation the document lists no security for is open, as it is to a client
+  reading the document; `no_auth` is how to say so on purpose when a default exists. (The older comment on `requirements` said a gate
+  "should not read" an undeclared operation as open. That caution is kept as advice: declare `default_require`, and an operation
+  that forgets to say anything is protected by it. The alternative, a gate that disagrees with the document it publishes, is the
+  failure this layer exists to prevent.)
+* **Credentials are data, not code.** A verifier cannot be a callback (§2). The application gives `guard` a `Tokens` table: pairs of
+  (scheme name, secret). A request's bearer secret is compared with every entry; the scheme(s) it belongs to are the answer. The
+  comparison has no early exit on a mismatching byte and visits every entry, so the time does not say which entry came closest. That is
+  *not* a claim of constant time: lengths differ and the language does not promise it.
+* **Anything richer is the application's.** A signed token (JWT), a database lookup, an expiry: `web.bearer` hands the secret's span to
+  the application, and `web.unauthorized` / `web.forbidden` write the two answers, so a service with its own verification still gets the
+  wire format right. `guard` is the common case, not the only door.
+
+### 11.3 What it answers
+
+* No `Authorization` header, or one that is not `Bearer <secret>` (the word is case-insensitive, RFC 9110 §11.1): **401**,
+  `WWW-Authenticate: Bearer`, `application/problem+json` (title `Unauthorized`).
+* A secret in no entry: **401**, `WWW-Authenticate: Bearer error="invalid_token"`.
+* A secret that belongs to a scheme the operation does not list: **403**, `WWW-Authenticate: Bearer error="insufficient_scope"`
+  (RFC 6750 §3.1), problem+json (title `Forbidden`). "Scope" here is the scheme: the hooks service's three token scopes are three
+  schemes.
+* A secret that belongs to two schemes passes if either is listed.
+* The 401 and 403 are written whether or not the document declares them; the document gains `401`/`403` only if the application
+  declares them with `respond_problem` (it should, for an operation that requires credentials).
+
+### 11.4 Order, and what it leaks
+
+`dispatch` runs first, so a request is told its parameters are invalid *before* it is told it is unauthenticated, and a route that does
+not exist is a 404 to everybody. Putting `guard` first would need the route, which is `dispatch`'s first step, so the order is not
+arbitrary. What the order reveals is the contract, which `/openapi.json` publishes to the same caller; it does not reveal whether a
+resource exists (a 404 for a missing user comes from the handler, after `guard`). That is the argument; a service that serves no
+public document and wants the other order can call `web.find` first and `guard`, then `dispatch`, at the price of routing twice.
+
+### 11.5 Middleware: what is supplied, what is not
+
+Supplied as plain functions, called in the order the loop reads:
+
+* `web.guard` (above);
+* `web.log_line`: one access-log line, `METHOD path status milliseconds`, formatted as bytes. The application writes it
+  (`err_write`) and times it (`Clock`, which reads milliseconds), so both capabilities stay in its signature and in `cancho authority`. The **query string is
+  not logged**: it is where people put secrets. The path is capped at 200 bytes.
+
+Not supplied, on purpose: a request id (needs entropy: an `Fs("/dev/urandom")` capability the application should choose to hold), CORS
+(a policy per deployment), rate limiting (state shared across connections), a body-size limit (`http.server` already refuses past its
+buffer with a 413). Each is a few lines in the application, and an application that does not call one cannot be wrapped in it
+by accident.
+
+### 11.6 What it costs
+
+`guard` reads the declaration's security records: a pass over all of them per request (`requirements` scans; unlike parameters, security
+has no index). §11.9 measures it on the example (6 operations); in an API of thousands of operations it would be the next thing to index.
+
+### 11.7 What this deliberately is not
+
+Not OAuth, not sessions, not a user model. No token hashing at rest (the table holds secrets as given: hash before you add them if
+the secret should not sit in memory, and compare hashes). No expiry or revocation (restart, or a table the application edits). Basic
+auth, API keys in a header other than `Authorization`, and mTLS are not here; the declaration has bearer schemes only (§8).
+
+### 11.8 Open questions
+
+* Whether a scheme should be able to carry scopes inside one token (a list on the table entry), instead of one scheme per scope.
+* Whether `guard` should run inside `dispatch` for an API whose every operation is declared (one call instead of two) once the order
+  question of §11.4 has been looked at against a real service.
+
+### 11.9 What was shown, and what building it found
+
+* **Unit tests (`tests/web_test.cho`, five new, 19 in all):** an open operation and an undeclared one pass with no credential and with a
+  garbage one; no header, `Basic`, `Bearer` with nothing after it and `BearerAAA` are the plain 401; a token nobody holds, one byte
+  short of a real one, one byte longer and one in the wrong case are `invalid_token`; a token held for another scheme is the 403 (and
+  a token for no listed scheme at all, `reader`, too); any one of two alternatives opens `/b`; a secret held for two schemes opens what
+  either opens; the word `bearer` in any case, several spaces, trailing white space and a lower-case header name are read; the
+  document's default applies, `no_auth` and an operation's own `require` beat it; `log_line` leaves the query out, reads the status
+  from the response and cuts a 281-byte path to 200.
+* **Mutations.** Ten changes to `guard`, `bearer`, `same_secret` and `log_line` each fail a test: the scheme check skipped, the length
+  not compared, the word's case compared, trailing white space kept, the 403 as a 401, an undeclared operation closed, only the first
+  token read, the path cut moved, the space after the word not required, and the `invalid_token` flag inverted.
+* **On a socket (`tests/guarded_e2e.py`, nine tests, in CI):** `examples/guarded` with two schemes. Every status it answers is a status
+  the served document declares for that operation (401 and 403 are declared with `respond_problem`); the document's `security`
+  entries say what the gate does; the log has the path and never a query string or a token (the test puts a token in a query).
+* **Authority.** `docs/authority-guarded.json` pins the report of `examples/guarded` with `scripts/check-authority.sh` (`EXAMPLE=guarded`):
+  `args`, `clock`, `conn_*`, `err_write`, `heap`, `net_in`, `poll` and no foreign symbol, the same effects as `users`. Adding `web.guard`
+  to `web` did not change the report of `users`, which does not call it.
+* **What it costs, measured:** `GET /report` with a valid token against `GET /health`, same service, one core, six alternating runs
+  of four seconds each, access log on (stderr): the open read is 111,000 a second (median), the guarded one 105,000, about 5% slower,
+  which is the size of the noise between runs of the same request (103,000 to 115,000 for the open one). One VM. The service has six
+  operations; with thousands the unindexed scan of §11.6 would show. Not measured.
+* **`log_line` was first written in microseconds.** `Clock` reads milliseconds (`clock_ms`); a line that said `us` would have been
+  false in every digit it printed. It is milliseconds.
+* **`token` first took the offset of the secret from the buffer's length**, which the language does not give for an owned buffer;
+  `text_add` already returns the offset and was used instead.
+* **The old caution in `requirements`' comment** (an operation the document says nothing about "should not read as open") is not what
+  `guard` does, and §11.2 says why: a gate that disagrees with its own published document is the failure. It is kept as advice: use
+  `default_require`.
+* **The package store was republished** (`.cancho-vcs`), as every change to `src/web.cho` needs.
+* **Not done:** the server reads a request's body before `dispatch` runs, so an unauthenticated request costs what any request costs up
+  to that point. Rate limiting is not here. `users`, `users_pg` and `users_threads` declare no security and do not call `guard`.

@@ -432,7 +432,7 @@ pub fn component[&h, &n](heap: &!h Heap, a: Api, name: &n [byte], node: int) -> 
 }
 
 // ---------------------------------------------------------------------
-// Who may call (the document only: nothing here checks a token)
+// Who may call (declared here; `guard`, at the end of this file, checks it)
 // ---------------------------------------------------------------------
 
 // An HTTP bearer security scheme, listed under `components.securitySchemes`. `description`
@@ -966,7 +966,7 @@ fn explain[&h, &a, &s, &q, &t, &p, &g, &x](heap: &!h Heap, api: &a Api, sc: &s s
 }
 
 // `{"type":"about:blank","title":..,"status":..,"detail":..}` as `application/problem+json`.
-fn answer_problem[&h, &t, &d](heap: &!h Heap, out: buffer.Buffer, status: int, title: &t [byte], detail: &d [byte], keep: bool) -> [heap] buffer.Buffer {
+fn answer_problem_with[&h, &t, &d, &x](heap: &!h Heap, out: buffer.Buffer, status: int, title: &t [byte], detail: &d [byte], keep: bool, extra: &x [byte]) -> [heap] buffer.Buffer {
     var w = json.writer(heap, 128);
     w = json.begin_object(heap, w);
     w = json.put_key(heap, w, "type");
@@ -981,11 +981,15 @@ fn answer_problem[&h, &t, &d](heap: &!h Heap, out: buffer.Buffer, status: int, t
     let body = json.finish(w);
     var answer = out;
     borrow body as &bb in {
-        answer = http.respond_head_with(heap, answer, status, "application/problem+json", len(buffer.bytes(bb)), keep, "");
+        answer = http.respond_head_with(heap, answer, status, "application/problem+json", len(buffer.bytes(bb)), keep, extra);
         answer = buffer.append(heap, answer, buffer.bytes(bb));
     }
     buffer.drop(heap, body);
     return answer;
+}
+
+fn answer_problem[&h, &t, &d](heap: &!h Heap, out: buffer.Buffer, status: int, title: &t [byte], detail: &d [byte], keep: bool) -> [heap] buffer.Buffer {
+    return answer_problem_with(heap, out, status, title, detail, keep, "");
 }
 
 // The 422 for parameters: `count` errors found, `eb` the entries of the first of them.
@@ -1538,4 +1542,190 @@ pub fn openapi[&h, &a, &s, &t, &v](heap: &!h Heap, api: &a Api, sc: &s schema.Sc
     w = json.end_object(heap, w);
     w = json.end_object(heap, w);
     return json.finish(w);
+}
+
+// ---------------------------------------------------------------------
+// Who may call, enforced (`docs/design.md` §11)
+// ---------------------------------------------------------------------
+//
+// `guard` is the check of the sentence the document already says: "a caller needs one of these
+// alternatives". It is called in the application's loop after `dispatch`, before the handler. The
+// credentials are data (`Tokens`: pairs of a scheme's name and a secret), because a verifier cannot
+// be a callback (§2). Anything richer than a table of secrets is the application's, with `bearer`
+// and the two writers below.
+
+// The secrets the service accepts, each belonging to one scheme (`bearer_scheme`'s name).
+pub res struct Tokens {
+    text: buffer.Buffer,
+    // Four ints per secret: where its scheme's name is in `text`, that name's length, where the secret is, its length.
+    ents: vec.Vec[int],
+}
+
+pub fn tokens_empty[&h](heap: &!h Heap) -> [heap] Tokens {
+    return Tokens { text: buffer.empty(heap, 64), ents: vec.empty(heap, 8, 0) };
+}
+
+pub fn tokens_drop[&h](heap: &!h Heap, t: Tokens) -> [heap] int {
+    let Tokens { text, ents } = t;
+    buffer.drop(heap, text);
+    vec.drop(heap, ents);
+    return 0;
+}
+
+// `secret` is accepted for the scheme called `scheme`. The same secret may be added for several schemes.
+pub fn token[&h, &s, &x](heap: &!h Heap, t: Tokens, scheme: &s [byte], secret: &x [byte]) -> [heap] Tokens {
+    let Tokens { text, ents } = t;
+    let (t1, scheme_at) = text_add(heap, text, scheme);
+    let (tx, secret_at) = text_add(heap, t1, secret);
+    var e = vec.push(heap, ents, scheme_at);
+    e = vec.push(heap, e, len(scheme));
+    e = vec.push(heap, e, secret_at);
+    e = vec.push(heap, e, len(secret));
+    return Tokens { text: tx, ents: e };
+}
+
+fn lower_byte(c: int) -> [] int {
+    if c >= 65 && c <= 90 {
+        return c + 32;
+    }
+    return c;
+}
+
+// The secret of an `Authorization: Bearer <secret>` header, or an empty text if there is none, it is another scheme, or the
+// secret is empty. The word `Bearer` is case-insensitive and one or more spaces follow it (RFC 9110 §11.1); trailing spaces and
+// tabs are not part of the secret.
+pub fn bearer[&q, &t](request: &q [byte], table: &t [int]) -> [] &q [byte] {
+    let v = http.header(request, table, "authorization");
+    var at = 0;
+    if len(v) < 8 {
+        return v[0..0];
+    }
+    let word = "bearer";
+    while at < 6 {
+        if lower_byte(int_of(v[at])) != int_of(word[at]) {
+            return v[0..0];
+        }
+        at = at + 1;
+    }
+    if int_of(v[6]) != 32 {
+        return v[0..0];
+    }
+    while at < len(v) && int_of(v[at]) == 32 {
+        at = at + 1;
+    }
+    var end = len(v);
+    while end > at && (int_of(v[end - 1]) == 32 || int_of(v[end - 1]) == 9) {
+        end = end - 1;
+    }
+    return v[at..end];
+}
+
+// 401: no credential, or none that is known (`invalid`).
+pub fn unauthorized[&h](heap: &!h Heap, out: buffer.Buffer, keep: bool, invalid: bool) -> [heap] buffer.Buffer {
+    if invalid {
+        return answer_problem_with(heap, out, 401, "Unauthorized", "the bearer token is not valid", keep, "WWW-Authenticate: Bearer error=\"invalid_token\"\r\n");
+    }
+    return answer_problem_with(heap, out, 401, "Unauthorized", "send Authorization: Bearer <token>", keep, "WWW-Authenticate: Bearer\r\n");
+}
+
+// 403: a known credential that does not open this operation.
+pub fn forbidden[&h](heap: &!h Heap, out: buffer.Buffer, keep: bool) -> [heap] buffer.Buffer {
+    return answer_problem_with(heap, out, 403, "Forbidden", "this token may not call this operation", keep, "WWW-Authenticate: Bearer error=\"insufficient_scope\"\r\n");
+}
+
+// Whether `name` is one of the schemes `op` lists.
+fn lists_scheme[&a, &n](api: &a Api, op: int, name: &n [byte]) -> [] bool {
+    var i = 0;
+    let n = requirements(api, op);
+    while i < n {
+        if bytes.equal(requirement(api, op, i), name) {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+// Whether two secrets are the same. Every byte of `x` is looked at whatever the outcome, with no branch on the data; this is not
+// a claim of constant time (the lengths differ, and the language does not promise it).
+fn same_secret[&a, &b](x: &a [byte], y: &b [byte]) -> [] bool {
+    var diff = 0;
+    if len(x) != len(y) {
+        diff = 1;
+    }
+    var i = 0;
+    var j = 0;
+    while i < len(x) {
+        var other = 0;
+        if len(y) > 0 {
+            other = int_of(y[j]);
+            j = j + 1;
+            if j == len(y) {
+                j = 0;
+            }
+        }
+        diff = diff + (int_of(x[i]) ^ other);
+        i = i + 1;
+    }
+    return diff == 0;
+}
+
+// Let a request through to the handler of `op`, or answer it. The answer is (`out`, true) for a request that may go on, and the
+// 401 or 403 appended to `out` with false for one that may not. An operation the document lists no alternative for is open, as the
+// document says. See §11.3 for what each answer means.
+pub fn guard[&h, &r, &k, &q, &t](heap: &!h Heap, api: &r Api, tokens: &k Tokens, request: &q [byte], table: &t [int], op: int, out: buffer.Buffer, keep: bool) -> [heap] (buffer.Buffer, bool) {
+    if requirements(api, op) == 0 {
+        return (out, true);
+    }
+    let secret = bearer(request, table);
+    if len(secret) == 0 {
+        return (unauthorized(heap, out, keep, false), false);
+    }
+    var matched = false;
+    var allowed = false;
+    var i = 0;
+    while i < vec.size(tokens.ents) {
+        let at = vec.get(tokens.ents, i);
+        let n = vec.get(tokens.ents, i + 1);
+        let sat = vec.get(tokens.ents, i + 2);
+        let sn = vec.get(tokens.ents, i + 3);
+        let mine = same_secret(secret, buffer.bytes(tokens.text)[sat..sat + sn]);
+        if mine {
+            matched = true;
+            if lists_scheme(api, op, buffer.bytes(tokens.text)[at..at + n]) {
+                allowed = true;
+            }
+        }
+        i = i + 4;
+    }
+    if allowed {
+        return (out, true);
+    }
+    if matched {
+        return (forbidden(heap, out, keep), false);
+    }
+    return (unauthorized(heap, out, keep, true), false);
+}
+
+// One access-log line: `METHOD path status milliseconds` and a newline. `response` is what was answered (its status line is
+// read); the query string is left out because it is where secrets get put; the path is cut at 200 bytes. The application writes the
+// line (`err_write`) and times the request (`Clock`), so both stay in its own signature.
+pub fn log_line[&h, &q, &t, &r](heap: &!h Heap, request: &q [byte], table: &t [int], response: &r [byte], millis: int) -> [heap] buffer.Buffer {
+    var b = buffer.append(heap, buffer.empty(heap, 96), http.method(request, table));
+    b = buffer.append(heap, b, " ");
+    let path = http.path(request, table);
+    if len(path) > 200 {
+        b = buffer.append(heap, b, path[0..200]);
+    } else {
+        b = buffer.append(heap, b, path);
+    }
+    b = buffer.append(heap, b, " ");
+    var status = 0;
+    if len(response) >= 12 {
+        status = (int_of(response[9]) - 48) * 100 + (int_of(response[10]) - 48) * 10 + (int_of(response[11]) - 48);
+    }
+    b = buffer.push_nat(heap, b, status);
+    b = buffer.append(heap, b, " ");
+    b = buffer.push_nat(heap, b, millis);
+    return buffer.append(heap, b, "ms\n");
 }

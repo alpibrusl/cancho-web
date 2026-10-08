@@ -1,0 +1,63 @@
+{
+  "bounded": true,
+  "unbounded_by": [],
+  "effects": [
+    "args",
+    "clock",
+    "conn_accept",
+    "conn_read",
+    "conn_write",
+    "err_write",
+    "heap",
+    "net_in",
+    "poll"
+  ],
+  "labels": [
+    {
+      "name": "args",
+      "argument": null,
+      "bounded": true
+    },
+    {
+      "name": "clock",
+      "argument": null,
+      "bounded": true
+    },
+    {
+      "name": "conn_accept",
+      "argument": null,
+      "bounded": true
+    },
+    {
+      "name": "conn_read",
+      "argument": null,
+      "bounded": true
+    },
+    {
+      "name": "conn_write",
+      "argument": null,
+      "bounded": true
+    },
+    {
+      "name": "err_write",
+      "argument": null,
+      "bounded": true
+    },
+    {
+      "name": "heap",
+      "argument": null,
+      "bounded": true
+    },
+    {
+      "name": "net_in",
+      "argument": "",
+      "bounded": true
+    },
+    {
+      "name": "poll",
+      "argument": null,
+      "bounded": true
+    }
+  ],
+  "foreign_symbols": []
+}

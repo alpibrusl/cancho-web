@@ -8,6 +8,7 @@
 #   scripts/check-authority.sh --update    write docs/authority.json (after reading what changed)
 #
 #   CANCHO   the compiler (default: cancho on PATH; the revision ci.yml builds with)
+#   EXAMPLE  which service (default: users, pinned in docs/authority.json; `guarded` is pinned in docs/authority-guarded.json)
 #
 # The program is examples/users/users.cho, src/web.cho and the packages that `scripts/build.sh` fetched into build/deps (run a build first).
 # What is left out of the pinned file: the list of provably pure functions and the three counts (`folded_operators`, `folded_calls`,
@@ -16,6 +17,9 @@
 set -euo pipefail
 here=$(cd "$(dirname "$0")/.." && pwd)
 CANCHO=${CANCHO:-cancho}
+EXAMPLE=${EXAMPLE:-users}
+pinned=docs/authority.json
+[ "$EXAMPLE" = users ] || pinned=docs/authority-$EXAMPLE.json
 mode=compare
 case "${1:-}" in
   "") ;;
@@ -26,7 +30,7 @@ cd "$here"
 ls build/deps/*.cho >/dev/null 2>&1 || { echo "check-authority: no build/deps; run scripts/build.sh first" >&2; exit 2; }
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-"$CANCHO" authority examples/users/users.cho src/web.cho build/deps/*.cho --std --output json > "$work/raw.json"
+"$CANCHO" authority examples/$EXAMPLE/$EXAMPLE.cho src/web.cho build/deps/*.cho --std --output json > "$work/raw.json"
 python3 - "$work/raw.json" > "$work/report.json" <<'PY'
 import json, sys
 report = json.load(open(sys.argv[1]))
@@ -37,13 +41,13 @@ for volatile in ("pure", "folded_operators", "folded_calls", "functions"):
 print(json.dumps(report, indent=2))
 PY
 if [ "$mode" = update ]; then
-  cp "$work/report.json" docs/authority.json
-  echo "wrote docs/authority.json"
+  cp "$work/report.json" "$pinned"
+  echo "wrote $pinned"
   exit 0
 fi
-if diff -u docs/authority.json "$work/report.json"; then
-  echo "the committed authority report is what the users service has"
+if diff -u "$pinned" "$work/report.json"; then
+  echo "the committed authority report is what the $EXAMPLE service has"
 else
-  echo "check-authority: the report changed; read the diff, and if it is what you meant, run scripts/check-authority.sh --update and commit docs/authority.json" >&2
+  echo "check-authority: the report changed; read the diff, and if it is what you meant, run scripts/check-authority.sh --update and commit $pinned" >&2
   exit 1
 fi

@@ -24,8 +24,8 @@ responses -- and the router and the OpenAPI document both come from that declara
 (the document is checked in as [`examples/users/openapi.json`](examples/users/openapi.json),
 so a change to the API is a change to a file). `web.dispatch` judges a request's path, query and header parameters with the
 schema nodes that document them *before* the handler runs, so the handler is not reached for a request that breaks the
-contract (`examples/users` uses it; [`docs/design.md`](docs/design.md) §9). Not yet: middleware, and defaults declared
-once ([`docs/design.md`](docs/design.md) §8 and §9.10 say what is next and why).
+contract (`examples/users` uses it; [`docs/design.md`](docs/design.md) §9). `web.guard` enforces what the document says about who may call (bearer tokens held as data; [`docs/design.md`](docs/design.md) §11,
+`examples/guarded`). Not yet: defaults declared once ([`docs/design.md`](docs/design.md) §8 and §9.10 say what is next and why).
 
 ## What you get
 
@@ -33,7 +33,7 @@ once ([`docs/design.md`](docs/design.md) §8 and §9.10 say what is next and why
 * **Parameters judged before the handler.** `web.dispatch` checks every declared path, query and header parameter against its schema node, refuses an unknown or repeated query key, and answers the 404, the 405 or the 422 itself; the handler reads valid values from a slot table.
 * **Every error at once.** A body that breaks the rules gets all of its errors, each with its JSON Pointer, as RFC 9457 `application/problem+json`. No coercion.
 * **A contract that is a file.** The served document is byte for byte the checked-in `openapi.json`, and Schemathesis generates requests from it.
-* **Who may call, declared.** Bearer schemes, `require` and `no_auth` are written to the document and can be read back; nothing here checks a token.
+* **Who may call, declared and enforced.** Bearer schemes, `require` and `no_auth` are written to the document and can be read back, and `web.guard` checks a request against them: 401, 403, or through. The tokens are data, not a callback.
 * **A package.** `web` is published as a store, so a project names it in `cancho.toml` instead of copying a file.
 * **Fast, measured.** 14-18x FastAPI and 1.3-1.4x Go `net/http` on one core, 19-25x FastAPI's two workers on two; ahead of a hand-written C server on a read and a page, 6-11% behind it on the rest ([benchmarks](#benchmarks)).
 * **PostgreSQL**, optionally, with a pool: the same API, the same tests, the same document.
@@ -249,10 +249,9 @@ A parameter that breaks its node is a `422` that lists every error, with where i
 `max_length`, `choice`, `required`, `unknown`, `duplicate`, `nul`). A path or query value is judged decoded (`%35` is `5`; in a
 query `+` is a space); an integer is digits and nothing else (`5.0`, `+5` and `0x5` are `type`). `web.slot`, `web.most_args`,
 `web.int_arg`, `web.bool_arg`, `web.present`, `web.text_start` and `web.text_end` are the accessors; `web.find` is
-unchanged and `examples/users_pg` and `examples/users_threads` still use it.
+unchanged, and a service that does not want dispatch can keep calling it.
 
-Who may call an operation is declared the same way, and only the document is affected (the
-application's own gate still decides): `web.bearer_scheme(heap, api, "admin", "the admin token")`,
+Who may call an operation is declared the same way: `web.bearer_scheme(heap, api, "admin", "the admin token")`,
 then `web.require(heap, api, op, "admin")` once for each token that will do (alternatives),
 `web.no_auth(heap, api, op)` for an open route, and `web.default_require` for the document's default.
 An API whose errors are not `problem+json` names its error schema `Error` and answers with
@@ -261,7 +260,26 @@ An API whose errors are not `problem+json` names its error schema `Error` and an
 What was declared can be asked back, so that a gate need not keep a second table: `web.requirements(api, op)` is how many alternatives
 `op` has (its own `require` calls, else the document's default; 0 for an open operation, for one that does not exist, and for one about which
 nothing was declared), `web.requirement(api, op, i)` the scheme of the `i`-th (an empty text beyond the last) and `web.is_open(api, op)` whether
-it was declared `no_auth`. A caller needs one of the alternatives. Nothing here checks a token.
+it was declared `no_auth`. A caller needs one of the alternatives.
+
+`web.guard` is the check of that sentence, called in the loop after `dispatch` and before the handler. The credentials it accepts are
+data (a callback is not something cancho has, `docs/design.md` §2): `web.tokens_empty`, then `web.token(heap, tokens, "admin", secret)`
+once for each secret.
+
+    let (gated, allowed) = web.guard(heap, api, tokens, request, table, id, routed, keep);
+    if !allowed { return gated; }
+
+* no bearer credential: **401** with `WWW-Authenticate: Bearer`; a secret nobody holds: 401 `invalid_token`;
+* a secret held for a scheme the operation does not list: **403** `insufficient_scope`;
+* a secret held for two schemes opens what either opens; an operation the document lists nothing for is open, as the document says;
+* all answers are `application/problem+json`; the secret is compared with every entry and every byte, with no early exit on a mismatch
+  (not a claim of constant time).
+
+Anything richer (a signed token, a lookup, an expiry) is the application's: `web.bearer(request, table)` is the secret and
+`web.unauthorized` / `web.forbidden` write the two answers. Middleware here is a call the application makes in an order it can read; the
+layer supplies `web.log_line` (`METHOD path status milliseconds`, the query string left out because it is where secrets go) and
+leaves a request id, CORS and rate limiting to the application (§11.5 says why). `examples/guarded` runs it;
+`tests/guarded_e2e.py` holds it to its own document; its authority report is pinned in `docs/authority-guarded.json`.
 
 A request header is `web.header_param(heap, api, op, "Idempotency-Key", node, false)`; a plain-text answer is
 `web.respond_text`; `web.optional_body` is a body that may be left out; words are `web.summary`, `web.describe` (an operation), `web.describe_param` (a parameter by
@@ -363,6 +381,7 @@ scripts/check-authority.sh  the service's `cancho authority` report against docs
 docs/authority.json       what the users service can touch, as last approved: effects, bounds, foreign symbols
 deps/*.lock               the packages this builds against, pinned by hash
 tests/e2e.py              the end-to-end tests (real binary, real sockets, Schemathesis)
+examples/guarded/         `web.guard` and `web.log_line` on a socket; tests/guarded_e2e.py holds it to its document
 tests/web_test.cho         unit tests of `web`: documents derived by hand, compared byte for byte
 benches/                  the benchmark: the FastAPI, Go (net/http, fasthttp), Rust (axum) and C implementations of the same
                           API, the load generator, and the checks that they do the same work
@@ -379,7 +398,7 @@ scripts/figures.py        draws docs/figures/bench.svg from the table in this fi
 
 Not yet built:
 
-Middleware, auth, and anything like FastAPI's dependency injection; defaults declared once
+Anything like FastAPI's dependency injection; middleware beyond `guard` and `log_line` (a request id, CORS, rate limiting); OAuth, sessions, expiry and revocation; defaults declared once
 (a handler still says what `limit` is when it is absent); `$ref`/`$defs` in the generated JSON Schema. (`dispatch` is in all
 three services now: `users`, `users_pg` and `users_threads`; the last two were converted after the first, so a bad parameter is
 the same answer in each.) The design document says which of these are decided and which are open.

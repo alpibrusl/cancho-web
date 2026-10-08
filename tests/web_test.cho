@@ -690,3 +690,232 @@ fn test_dispatch_bounds_what_a_hostile_request_makes_it_do[&h](heap: &!h Heap) -
     schema.drop(heap, s);
     return 0;
 }
+
+// ---------------------------------------------------------------------
+// guard: who may call, enforced (docs/design.md section 11)
+// ---------------------------------------------------------------------
+
+// /open  no_auth        /a  admin        /b  ingest or admin        /c  nothing declared (open, as the document says)
+fn guard_api[&h](heap: &!h Heap) -> [heap] web.Api {
+    var api = web.empty(heap);
+    api = web.bearer_scheme(heap, api, "admin", "");
+    api = web.bearer_scheme(heap, api, "ingest", "");
+    let (a1, open) = web.operation(heap, api, "GET", "/open", "open");
+    api = web.no_auth(heap, a1, open);
+    let (a2, a) = web.operation(heap, api, "GET", "/a", "a");
+    api = web.require(heap, a2, a, "admin");
+    let (a3, b) = web.operation(heap, api, "GET", "/b", "b");
+    api = web.require(heap, a3, b, "ingest");
+    api = web.require(heap, api, b, "admin");
+    let (a4, c) = web.operation(heap, api, "GET", "/c", "c");
+    return a4;
+}
+
+fn guard_tokens[&h](heap: &!h Heap) -> [heap] web.Tokens {
+    var t = web.tokens_empty(heap);
+    t = web.token(heap, t, "admin", "AAA");
+    t = web.token(heap, t, "ingest", "III");
+    t = web.token(heap, t, "admin", "SHARED");
+    t = web.token(heap, t, "ingest", "SHARED");
+    t = web.token(heap, t, "reader", "RRR");
+    return t;
+}
+
+// What `guard` made of a request: `pass`, or `status|WWW-Authenticate value|body`.
+fn gate[&h, &a, &k, &r](heap: &!h Heap, api: &a web.Api, tokens: &k web.Tokens, raw: &r [byte]) -> [heap] buffer.Buffer {
+    let table = box_slice(heap, 80, 0);
+    let params = box_slice(heap, 2 * web.most_params(api) + 2, 0);
+    var result = buffer.empty(heap, 64);
+    borrow mut table as &!tw in {
+        test.assert(http.parse(raw, contents(tw)) >= 0);
+        borrow mut params as &!pw in {
+            let op = web.find(api, http.method(raw, contents(tw)), http.path(raw, contents(tw)), contents(pw));
+            test.assert(op > 0);
+            let (answer, allowed) = web.guard(heap, api, tokens, raw, contents(tw), op, buffer.empty(heap, 64), false);
+            if allowed {
+                result = buffer.append(heap, result, "pass");
+                buffer.drop(heap, answer);
+            } else {
+                borrow answer as &ab in {
+                    let text = buffer.bytes(ab);
+                    let blank = index_of(text, "\r\n\r\n");
+                    test.assert(blank > 0);
+                    let status = text[9..12];
+                    let at = index_of(text, "\r\nWWW-Authenticate: ");
+                    test.assert(at > 0);
+                    let rest = text[at + 20..len(text)];
+                    let eol = index_of(rest, "\r\n");
+                    result = buffer.append(heap, result, status);
+                    result = buffer.append(heap, result, "|");
+                    result = buffer.append(heap, result, rest[0..eol]);
+                    result = buffer.append(heap, result, "|");
+                    result = buffer.append(heap, result, text[blank + 4..len(text)]);
+                    test.assert(index_of(text, "\r\nContent-Type: application/problem+json\r\n") > 0);
+                }
+                buffer.drop(heap, answer);
+            }
+        }
+    }
+    unbox_slice(heap, params);
+    unbox_slice(heap, table);
+    return result;
+}
+
+fn gated[&h, &a, &k, &r, &w](heap: &!h Heap, api: &a web.Api, tokens: &k web.Tokens, raw: &r [byte], want: &w [byte]) -> [heap] int {
+    let got = gate(heap, api, tokens, raw);
+    borrow got as &g in {
+        test.assert(bytes.equal(buffer.bytes(g), want));
+    }
+    buffer.drop(heap, got);
+    return 0;
+}
+
+fn test_guard_lets_open_operations_through_and_answers_the_rest[&h](heap: &!h Heap) -> [heap] int {
+    let api = guard_api(heap);
+    let tokens = guard_tokens(heap);
+    borrow api as &ar in {
+        borrow tokens as &tr in {
+            // Open on purpose, and open because the document says nothing: with or without a credential, even a bad one.
+            gated(heap, ar, tr, "GET /open HTTP/1.0\r\n\r\n", "pass");
+            gated(heap, ar, tr, "GET /c HTTP/1.0\r\n\r\n", "pass");
+            gated(heap, ar, tr, "GET /open HTTP/1.0\r\nAuthorization: Bearer nonsense\r\n\r\n", "pass");
+            // No credential, or not a bearer one: 401 asking for one.
+            let unauth = "401|Bearer|{\"type\":\"about:blank\",\"title\":\"Unauthorized\",\"status\":401,\"detail\":\"send Authorization: Bearer <token>\"}";
+            gated(heap, ar, tr, "GET /a HTTP/1.0\r\n\r\n", unauth);
+            gated(heap, ar, tr, "GET /a HTTP/1.0\r\nAuthorization: Basic AAA\r\n\r\n", unauth);
+            gated(heap, ar, tr, "GET /a HTTP/1.0\r\nAuthorization: Bearer\r\n\r\n", unauth);
+            gated(heap, ar, tr, "GET /a HTTP/1.0\r\nAuthorization: Bearer \r\n\r\n", unauth);
+            gated(heap, ar, tr, "GET /a HTTP/1.0\r\nAuthorization: BearerAAA\r\n\r\n", unauth);
+            // A bearer credential nobody holds: 401, invalid_token. A prefix or an extension of a real one is not it.
+            let invalid = "401|Bearer error=\"invalid_token\"|{\"type\":\"about:blank\",\"title\":\"Unauthorized\",\"status\":401,\"detail\":\"the bearer token is not valid\"}";
+            gated(heap, ar, tr, "GET /a HTTP/1.0\r\nAuthorization: Bearer ZZZ\r\n\r\n", invalid);
+            gated(heap, ar, tr, "GET /a HTTP/1.0\r\nAuthorization: Bearer AA\r\n\r\n", invalid);
+            gated(heap, ar, tr, "GET /a HTTP/1.0\r\nAuthorization: Bearer AAAA\r\n\r\n", invalid);
+            gated(heap, ar, tr, "GET /a HTTP/1.0\r\nAuthorization: Bearer aaa\r\n\r\n", invalid);
+            // A credential that is known and opens another door: 403, insufficient_scope.
+            let forbid = "403|Bearer error=\"insufficient_scope\"|{\"type\":\"about:blank\",\"title\":\"Forbidden\",\"status\":403,\"detail\":\"this token may not call this operation\"}";
+            gated(heap, ar, tr, "GET /a HTTP/1.0\r\nAuthorization: Bearer III\r\n\r\n", forbid);
+            gated(heap, ar, tr, "GET /a HTTP/1.0\r\nAuthorization: Bearer RRR\r\n\r\n", forbid);
+            gated(heap, ar, tr, "GET /b HTTP/1.0\r\nAuthorization: Bearer RRR\r\n\r\n", forbid);
+        }
+    }
+    web.tokens_drop(heap, tokens);
+    web.drop(heap, api);
+    return 0;
+}
+
+fn test_guard_takes_any_one_alternative_and_reads_the_header_as_rfc_9110[&h](heap: &!h Heap) -> [heap] int {
+    let api = guard_api(heap);
+    let tokens = guard_tokens(heap);
+    borrow api as &ar in {
+        borrow tokens as &tr in {
+            gated(heap, ar, tr, "GET /a HTTP/1.0\r\nAuthorization: Bearer AAA\r\n\r\n", "pass");
+            gated(heap, ar, tr, "GET /b HTTP/1.0\r\nAuthorization: Bearer AAA\r\n\r\n", "pass");
+            gated(heap, ar, tr, "GET /b HTTP/1.0\r\nAuthorization: Bearer III\r\n\r\n", "pass");
+            // A secret held for two schemes opens what either opens.
+            gated(heap, ar, tr, "GET /a HTTP/1.0\r\nAuthorization: Bearer SHARED\r\n\r\n", "pass");
+            gated(heap, ar, tr, "GET /b HTTP/1.0\r\nAuthorization: Bearer SHARED\r\n\r\n", "pass");
+            // The word is case-insensitive, any number of spaces follow it, trailing white space is not the secret, the header name is
+            // looked up whatever its case.
+            gated(heap, ar, tr, "GET /a HTTP/1.0\r\nAuthorization: bearer AAA\r\n\r\n", "pass");
+            gated(heap, ar, tr, "GET /a HTTP/1.0\r\nAuthorization: BEARER    AAA  \r\n\r\n", "pass");
+            gated(heap, ar, tr, "GET /a HTTP/1.0\r\nauthorization: Bearer AAA\r\n\r\n", "pass");
+        }
+    }
+    web.tokens_drop(heap, tokens);
+    web.drop(heap, api);
+    return 0;
+}
+
+// The document's default applies to an operation with no `require` of its own; `no_auth` and its own `require` win.
+fn test_guard_follows_the_default_of_the_document[&h](heap: &!h Heap) -> [heap] int {
+    var api = web.empty(heap);
+    api = web.bearer_scheme(heap, api, "admin", "");
+    api = web.bearer_scheme(heap, api, "ingest", "");
+    api = web.default_require(heap, api, "admin");
+    let (a1, inherits) = web.operation(heap, api, "GET", "/inherits", "inherits");
+    let (a2, open) = web.operation(heap, a1, "GET", "/open", "open");
+    api = web.no_auth(heap, a2, open);
+    let (a3, own) = web.operation(heap, api, "GET", "/own", "own");
+    api = web.require(heap, a3, own, "ingest");
+    let tokens = guard_tokens(heap);
+    borrow api as &ar in {
+        borrow tokens as &tr in {
+            gated(heap, ar, tr, "GET /inherits HTTP/1.0\r\nAuthorization: Bearer AAA\r\n\r\n", "pass");
+            gated(heap, ar, tr, "GET /open HTTP/1.0\r\n\r\n", "pass");
+            gated(heap, ar, tr, "GET /own HTTP/1.0\r\nAuthorization: Bearer III\r\n\r\n", "pass");
+            let got = gate(heap, ar, tr, "GET /inherits HTTP/1.0\r\n\r\n");
+            borrow got as &g in {
+                test.assert_eq(index_of(buffer.bytes(g), "401|Bearer|"), 0);
+            }
+            buffer.drop(heap, got);
+            // The default's scheme does not open an operation that names another.
+            let own403 = gate(heap, ar, tr, "GET /own HTTP/1.0\r\nAuthorization: Bearer AAA\r\n\r\n");
+            borrow own403 as &o in {
+                test.assert_eq(index_of(buffer.bytes(o), "403|"), 0);
+            }
+            buffer.drop(heap, own403);
+        }
+    }
+    web.tokens_drop(heap, tokens);
+    web.drop(heap, api);
+    return 0;
+}
+
+// `bearer` is the secret and nothing else; empty when there is none.
+fn test_bearer_is_the_secret_or_nothing[&h](heap: &!h Heap) -> [heap] int {
+    let table = box_slice(heap, 80, 0);
+    borrow mut table as &!tw in {
+        let a = "GET / HTTP/1.0\r\nAuthorization: Bearer s3cr3t\r\n\r\n";
+        test.assert(http.parse(a, contents(tw)) >= 0);
+        test.assert(bytes.equal(web.bearer(a, contents(tw)), "s3cr3t"));
+        let none = "GET / HTTP/1.0\r\n\r\n";
+        test.assert(http.parse(none, contents(tw)) >= 0);
+        test.assert_eq(len(web.bearer(none, contents(tw))), 0);
+        let basic = "GET / HTTP/1.0\r\nAuthorization: Basic x\r\n\r\n";
+        test.assert(http.parse(basic, contents(tw)) >= 0);
+        test.assert_eq(len(web.bearer(basic, contents(tw))), 0);
+    }
+    unbox_slice(heap, table);
+    return 0;
+}
+
+fn log_of[&h, &r, &p](heap: &!h Heap, raw: &r [byte], response: &p [byte], micros: int) -> [heap] buffer.Buffer {
+    let table = box_slice(heap, 80, 0);
+    var line = buffer.empty(heap, 8);
+    borrow mut table as &!tw in {
+        test.assert(http.parse(raw, contents(tw)) >= 0);
+        buffer.drop(heap, line);
+        line = web.log_line(heap, raw, contents(tw), response, micros);
+    }
+    unbox_slice(heap, table);
+    return line;
+}
+
+// The query string stays out of the log (it is where secrets go); the path is cut at 200 bytes; the status is the response's.
+fn test_log_line_leaves_out_the_query_and_cuts_the_path[&h](heap: &!h Heap) -> [heap] int {
+    let one = log_of(heap, "GET /users?token=secret HTTP/1.0\r\n\r\n", "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n", 42);
+    borrow one as &ob in {
+        test.assert(bytes.equal(buffer.bytes(ob), "GET /users 200 42ms\n"));
+    }
+    buffer.drop(heap, one);
+    let two = log_of(heap, "DELETE /users/7 HTTP/1.0\r\n\r\n", "HTTP/1.1 404 Not Found\r\n\r\n", 0);
+    borrow two as &tb in {
+        test.assert(bytes.equal(buffer.bytes(tb), "DELETE /users/7 404 0ms\n"));
+    }
+    buffer.drop(heap, two);
+    var long = buffer.append(heap, buffer.empty(heap, 64), "GET /");
+    long = repeated(heap, long, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 7);
+    long = buffer.append(heap, long, " HTTP/1.0\r\n\r\n");
+    borrow long as &lb in {
+        let three = log_of(heap, buffer.bytes(lb), "HTTP/1.1 200 OK\r\n\r\n", 5);
+        borrow three as &hb in {
+            // "GET " + 200 bytes of path + " 200 5ms\n"
+            test.assert_eq(len(buffer.bytes(hb)), 4 + 200 + 9);
+            test.assert(index_of(buffer.bytes(hb), " 200 5ms\n") == 204);
+        }
+        buffer.drop(heap, three);
+    }
+    buffer.drop(heap, long);
+    return 0;
+}
