@@ -380,9 +380,9 @@ scripts/figures.py        draws docs/figures/bench.svg from the table in this fi
 Not yet built:
 
 Middleware, auth, and anything like FastAPI's dependency injection; defaults declared once
-(a handler still says what `limit` is when it is absent); `$ref`/`$defs` in the generated JSON Schema; `dispatch` in
-`examples/users_pg` and `examples/users_threads`, which keep `web.find` and their own checks (so their answer to a bad parameter
-is still the old sentence). The design document says which of these are decided and which are open.
+(a handler still says what `limit` is when it is absent); `$ref`/`$defs` in the generated JSON Schema. (`dispatch` is in all
+three services now: `users`, `users_pg` and `users_threads`; the last two were converted after the first, so a bad parameter is
+the same answer in each.) The design document says which of these are decided and which are open.
 
 What `cancho` has now that this layer has not been tried with (corrected 2026-10-08; this file used to list all three as
 missing):

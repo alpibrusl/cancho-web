@@ -320,7 +320,7 @@ curl -s -XPOST -H 'Content-Type: application/json' -d '{{"name":"Ada","age":36}}
   <h2>Alpha: the declaration half is built</h2>
   <p class="note" style="margin:.2rem 0 .6rem">Alpha means the interfaces may change and nothing here is certified for production.</p>
   <ul>
-    <li><strong>Not built yet:</strong> defaults declared once (a handler still says what <code>limit</code> is when it is absent), and <code>dispatch</code> in the PostgreSQL and threads examples, which keep <code>web.find</code> and their own checks. <a href="{REPO}/blob/main/docs/design.md">§9</a> says what <code>dispatch</code> does, what building it found, and what it cost: a read 1.5% slower, a refused parameter 10%.</li>
+    <li><strong>Not built yet:</strong> defaults declared once (a handler still says what <code>limit</code> is when it is absent). <code>dispatch</code> is in all three services (<code>users</code>, <code>users_pg</code>, <code>users_threads</code>). <a href="{REPO}/blob/main/docs/design.md">§9</a> says what <code>dispatch</code> does, what building it found, and what it cost: a read 1.5% slower, a refused parameter 10%.</li>
     <li><strong>No middleware, authentication or dependency injection</strong>; nothing checks a token.</li>
     <li><strong>TLS, threads and streaming exist in cancho and are not used here.</strong> cancho has a TLS 1.3 server (not independently reviewed) and an <code>http.server</code> that a terminator can drive (<code>examples/https_hello</code>); no service in this repository has been put behind it, so terminate TLS in front. Threads run the loop twice in <code>examples/users_threads</code>, with a store each; a store they share is not built. <code>http.server</code> can stream a response; <code>web</code> cannot declare one yet.</li>
     <li>Responses are documented, not enforced: nothing checks that a handler answered what it declared. The contract tests do, from outside, for every request. A request <em>body</em> is still read by the handler (validated, but not by <code>dispatch</code>).</li>
@@ -462,7 +462,7 @@ build/users_pg 8080 127.0.0.1 5432 postgres users_pg - - 4     # ... &lt;passwor
 <section id="not">
   <h2>What these cases do not cover yet</h2>
   <div class="cols">
-    <div class="no"><h3>Not built</h3><ul><li>Defaults declared once (the handler still says what <code>limit</code> is when it is absent), and <code>dispatch</code> in the PostgreSQL and threads examples</li><li>Middleware, authentication, dependency injection</li><li>TLS (cancho has a server and an <code>https_hello</code> example; none of these services has been put behind it), streaming a response</li></ul></div>
+    <div class="no"><h3>Not built</h3><ul><li>Defaults declared once (the handler still says what <code>limit</code> is when it is absent)</li><li>Middleware, authentication, dependency injection</li><li>TLS (cancho has a server and an <code>https_hello</code> example; none of these services has been put behind it), streaming a response</li></ul></div>
     <div class="no"><h3>Not shown here</h3><ul><li>More than one core in one process beyond the two-thread example, which keeps a store per thread</li><li>A service that is not the users API: <a href="https://github.com/alpibrusl/cancho-hooks">cancho-hooks</a> declares its API with <code>web</code> (<code>src/api.cho</code>), and its router and document are made from that declaration</li></ul></div>
   </div>
 </section>
@@ -758,7 +758,7 @@ evidence = head(
   <h2>Not tested, not built</h2>
   <div class="cols">
     <div class="no"><h3>Not built</h3><ul>
-      <li>Defaults declared once; <code>dispatch</code> in the PostgreSQL and threads examples.</li>
+      <li>Defaults declared once.</li>
       <li>Middleware, authentication, dependency injection.</li>
       <li>TLS (cancho has a server, <code>examples/https_hello</code>, not independently reviewed; no service here has been put behind it), streaming a response, a store shared between threads (the two threads of <code>users_threads</code> share nothing).</li>
       <li><code>$ref</code>/<code>$defs</code> in the generated JSON Schema.</li>

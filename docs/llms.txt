@@ -18,7 +18,7 @@
 - Benchmarks are one VM, one run: on one core 14-18x FastAPI and 1.3-1.4x Go net/http, ahead of a hand-written C server on a read and a page and 6-11% behind it on the rest; on two cores each, 19-25x FastAPI's two workers. In a later run on a slower VM, Go's fasthttp was faster than cancho on a read (80,150 against 72,153 a second) and a create (45,428 against 42,562), cancho was ahead on a page of 20 and level on a rejected body, and cancho was 1.3-1.8x ahead of Rust axum on one thread. Resident memory at rest is 1.8 MiB and start-up 4 ms (FastAPI lean: 47 MiB and 486 ms; Go net/http 7.4 MiB; the hand-written C server 1.8 MiB, 6.7 MiB with 100 idle connections, cancho 2.0 MiB). A first run on a faster VM had 15-26x: a ratio against a Python program depends on the machine.
 
 ## Not built
-Middleware, authentication, dependency injection, defaults declared once; dispatch in the PostgreSQL and threads examples.
+Middleware, authentication, dependency injection, defaults declared once. (`web.dispatch` is in all three services: users, users_pg, users_threads.)
 
 ## In cancho, not used here
 cancho has a TLS 1.3 server (not independently reviewed) and an http.server that a terminator can drive (examples/https_hello): no service in this repository has been put behind it, so terminate TLS in front. cancho has threads: examples/users_threads runs the loop in two, each with its own store (not a deployable service). http.server can stream a response: web cannot declare one yet.
