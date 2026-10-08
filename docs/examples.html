@@ -253,7 +253,7 @@ Content-Type: application/problem+json
   <p class="sub">The document is generated from the same declaration that makes the router and the same schema nodes the validator runs, and it is checked in as <a href="https://github.com/alpibrusl/cancho-web/blob/main/examples/users/openapi.json"><code>examples/users/openapi.json</code></a>. An end-to-end test compares what the service serves with that file byte for byte, so a change to the API is a change to a file in review.</p>
   <pre class="code" tabindex="0"><code>$ curl -s localhost:8080/openapi.json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["openapi"], sorted(d["paths"]))'
 3.1.0 ['/health', '/users', '/users/{id}']</code></pre>
-  <p class="sub" style="margin-top:1.2rem">Who may call an operation is declared the same way, and only the document is affected (the application&rsquo;s own gate still decides): <code>web.bearer_scheme</code>, then <code>web.require</code> once for each token that will do, <code>web.no_auth</code> for an open route. <code>web.requirements</code>, <code>web.requirement</code> and <code>web.is_open</code> read it back, so a gate need not keep a second table.</p>
+  <p class="sub" style="margin-top:1.2rem">Who may call an operation is declared the same way: <code>web.bearer_scheme</code>, then <code>web.require</code> once for each token that will do, <code>web.no_auth</code> for an open route. <code>web.guard</code>, called after <code>dispatch</code> and before the handler, checks a request against exactly that: no bearer credential or an unknown secret is a 401, a secret held for another scheme is a 403, any one alternative opens the operation. The tokens are a table the application hands over (<code>web.token</code>), not a callback. <code>web.requirements</code>, <code>web.requirement</code> and <code>web.is_open</code> still read the declaration back for a service that wants its own gate.</p>
 </section>
 
 <section id="postgres">
@@ -271,7 +271,7 @@ build/users_pg 8080 127.0.0.1 5432 postgres users_pg - - 4     # ... &lt;passwor
 <section id="not">
   <h2>What these cases do not cover yet</h2>
   <div class="cols">
-    <div class="no"><h3>Not built</h3><ul><li>Defaults declared once (the handler still says what <code>limit</code> is when it is absent)</li><li>Middleware, authentication, dependency injection</li><li>TLS (cancho has a server and an <code>https_hello</code> example; none of these services has been put behind it), streaming a response</li></ul></div>
+    <div class="no"><h3>Not built</h3><ul><li>Defaults declared once (the handler still says what <code>limit</code> is when it is absent)</li><li>OAuth, sessions, dependency injection, a request id, CORS, rate limiting</li><li>TLS (cancho has a server and an <code>https_hello</code> example; none of these services has been put behind it), streaming a response</li></ul></div>
     <div class="no"><h3>Not shown here</h3><ul><li>More than one core in one process beyond the two-thread example, which keeps a store per thread</li><li>A service that is not the users API: <a href="https://github.com/alpibrusl/cancho-hooks">cancho-hooks</a> declares its API with <code>web</code> (<code>src/api.cho</code>), and its router and document are made from that declaration</li></ul></div>
   </div>
 </section>

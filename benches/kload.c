@@ -12,6 +12,8 @@
 // A response may be up to 64 KiB (a page of 100 users is about 9 KiB); a longer one is a
 // "short read" failure, not a miscount.
 //
+// KLOAD_HEADER="Name: value" adds one request header (an `Authorization`, to measure a gate).
+//
 // KLOAD_REQUESTS=N stops after N responses in total instead of after <seconds> (and
 // reports requests a second over the time that took): for a workload that adds state
 // per request, where "as many as fit in five seconds" would fill the store.
@@ -35,6 +37,7 @@
 #include <strings.h>
 #include <time.h>
 #include <unistd.h>
+static char extra[512];
 static int port, secs, K, want_lat; static volatile int stop; static long counts[64]; static const char *path, *method = "GET", *body = ""; static long budget; static int expect; static long wrong[64];
 static unsigned *lats[64]; static long nlat[64], caplat[64];
 static unsigned long long now_ns(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1000000000ull + t.tv_nsec; }
@@ -50,8 +53,8 @@ static int readresp(int fd, char *buf) {          // one response, by Content-Le
 }
 static void *run(void *a) {
   long id = (long)a; char req[2048];
-  if (!strcmp(method, "GET")) snprintf(req, sizeof req, "GET %s HTTP/1.1\r\nHost: x\r\n\r\n", path);
-  else snprintf(req, sizeof req, "%s %s HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: %zu\r\n\r\n%s", method, path, strlen(body), body);
+  if (!strcmp(method, "GET")) snprintf(req, sizeof req, "GET %s HTTP/1.1\r\nHost: x\r\n%s\r\n", path, extra);
+  else snprintf(req, sizeof req, "%s %s HTTP/1.1\r\nHost: x\r\n%sContent-Type: application/json\r\nContent-Length: %zu\r\n\r\n%s", method, path, extra, strlen(body), body);
   int *fds = malloc(sizeof(int) * K); unsigned long long *sent = malloc(sizeof(unsigned long long) * K); char buf[65536]; struct sockaddr_in sa = {0}; sa.sin_family = AF_INET; sa.sin_port = htons(port); inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr);
   for (int i = 0; i < K; i++) { fds[i] = socket(AF_INET, SOCK_STREAM, 0); int one = 1; setsockopt(fds[i], IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
     if (connect(fds[i], (struct sockaddr*)&sa, sizeof sa) < 0) { perror("connect"); exit(1); } }
@@ -69,6 +72,7 @@ int main(int c, char **v) {
   if (c > 7) method = v[7];
   if (c > 8) body = v[8];
   if (getenv("KLOAD_EXPECT")) expect = atoi(getenv("KLOAD_EXPECT"));
+  if (getenv("KLOAD_HEADER")) snprintf(extra, sizeof extra, "%.400s\r\n", getenv("KLOAD_HEADER"));
   const char *total = getenv("KLOAD_REQUESTS"); if (total) budget = atol(total) / threads;
   pthread_t t[64]; unsigned long long t0 = now_ns(); for (long i = 0; i < threads; i++) pthread_create(&t[i], 0, run, (void*)i);
   if (!budget) { sleep(secs); stop = 1; }
