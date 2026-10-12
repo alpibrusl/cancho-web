@@ -841,6 +841,8 @@ fn test_guard_follows_the_default_of_the_document[&h](heap: &!h Heap) -> [heap] 
     let tokens = guard_tokens(heap);
     borrow api as &ar in {
         borrow tokens as &tr in {
+            // Every operation here is decided: it inherits the default, is open, or names its own.
+            test.assert_eq(web.next_undecided(ar, 0), 0);
             gated(heap, ar, tr, "GET /inherits HTTP/1.0\r\nAuthorization: Bearer AAA\r\n\r\n", "pass");
             gated(heap, ar, tr, "GET /open HTTP/1.0\r\n\r\n", "pass");
             gated(heap, ar, tr, "GET /own HTTP/1.0\r\nAuthorization: Bearer III\r\n\r\n", "pass");
@@ -990,5 +992,24 @@ fn test_a_default_is_declared_once_and_read_from_the_slot[&h](heap: &!h Heap) ->
     }
     web.drop(heap, api);
     schema.drop(heap, s);
+    return 0;
+}
+
+// `next_undecided` lists the documented operations about which the document says nothing, and not the internal ones.
+fn test_next_undecided_finds_what_the_document_does_not_say[&h](heap: &!h Heap) -> [heap] int {
+    let (a1, doc) = web.internal(heap, guard_api(heap), "GET", "/doc");
+    let (a2, extra) = web.operation(heap, a1, "GET", "/extra", "extra");
+    borrow a2 as &ar in {
+        // /open (1) is open, /a (2) and /b (3) have alternatives, /c (4) says nothing, /doc (5) is internal, /extra (6) says nothing.
+        test.assert_eq(doc, 5);
+        test.assert_eq(extra, 6);
+        test.assert_eq(web.next_undecided(ar, 0), 4);
+        test.assert_eq(web.next_undecided(ar, 0 - 3), 4);
+        test.assert_eq(web.next_undecided(ar, 3), 4);
+        test.assert_eq(web.next_undecided(ar, 4), 6);
+        test.assert_eq(web.next_undecided(ar, 6), 0);
+        test.assert_eq(web.next_undecided(ar, 99), 0);
+    }
+    web.drop(heap, a2);
     return 0;
 }

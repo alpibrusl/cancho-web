@@ -14,6 +14,9 @@ edition 5;
 // other users of the machine (`ps`), so a service that matters reads them some other way. Each request
 // is logged to stderr as `METHOD path status milliseconds` -- the query string is left out.
 //
+// It refuses to start (exit status 5) if any documented operation says nothing about who may call it (`web.next_undecided`), instead of
+// letting it through as `guard` would.
+//
 // Authority (`cancho authority`): `net_in`, `conn_*`, `poll`, `clock`, `heap`, `args`, `err_write` and
 // no `ffi` and no file. A service that could read a token file would show `fs_read` there.
 
@@ -126,11 +129,30 @@ fn handle[&h, &r, &sc, &k, &d, &q, &t, &p, &g, &x](heap: &!h Heap, api: &r web.A
     return server.reply(heap, gated, 404, "{\"title\":\"Not Found\"}", keep);
 }
 
-fn run[&h, &k, &l, &i, &a, &b](heap: &!h Heap, clock: &k Clock, listener: &!l Listener, con: &!i Io, admin: &a [byte], ingest: &b [byte]) -> [heap, conn_accept, conn_read, conn_write, poll, clock, err_write] int {
+fn run[&h, &k, &l, &i, &a, &b](heap: &!h Heap, clock: &k Clock, listener: &!l Listener, con: &!i Io, port: int, admin: &a [byte], ingest: &b [byte]) -> [heap, conn_accept, conn_read, conn_write, poll, clock, err_write] int {
     match poller_new() {
         Polling::Ok(p) => {
             var srv = server.open(heap, p, listener, 16384, 0, 9);
             let (sc, api, doc) = setup(heap);
+            // Fail closed: refuse to run while the document says nothing about who may call some operation (`guard` would let it through).
+            var undecided = 0;
+            borrow api as &ar in {
+                undecided = web.next_undecided(ar, 0);
+            }
+            if undecided > 0 {
+                server.close(heap, srv);
+                buffer.drop(heap, doc);
+                web.drop(heap, api);
+                schema.drop(heap, sc);
+                return 5;
+            }
+            var line = buffer.append(heap, buffer.empty(heap, 64), "listening on ");
+            line = buffer.push_nat(heap, line, port);
+            line = buffer.push(heap, line, byte_of(10));
+            borrow line as &lb in {
+                io.error_all(con, buffer.bytes(lb));
+            }
+            buffer.drop(heap, line);
             var tokens = web.tokens_empty(heap);
             tokens = web.token(heap, tokens, "admin", admin);
             tokens = web.token(heap, tokens, "ingest", ingest);
@@ -230,15 +252,8 @@ fn main(world: World) -> [] int {
                                 listener_nonblocking(lh);
                                 borrow mut heap as &!h in {
                                     borrow mut io as &!i in {
-                                        var line = buffer.append(h, buffer.empty(h, 64), "listening on ");
-                                        line = buffer.push_nat(h, line, port);
-                                        line = buffer.push(h, line, byte_of(10));
-                                        borrow line as &lb in {
-                                            io.error_all(i, buffer.bytes(lb));
-                                        }
-                                        buffer.drop(h, line);
                                         borrow clock as &c in {
-                                            status = run(h, c, lh, i, arg(g, 2), arg(g, 3));
+                                            status = run(h, c, lh, i, port, arg(g, 2), arg(g, 3));
                                         }
                                     }
                                 }

@@ -283,7 +283,7 @@ once for each secret.
 Anything richer (a signed token, a lookup, an expiry) is the application's: `web.bearer(request, table)` is the secret and
 `web.unauthorized` / `web.forbidden` write the two answers. Middleware here is a call the application makes in an order it can read; the
 layer supplies `web.log_line` (`METHOD path status milliseconds`, the query string left out because it is where secrets go) and
-leaves a request id, CORS and rate limiting to the application (§11.5 says why). `examples/guarded` runs it;
+leaves a request id, CORS and rate limiting to the application (§11.5 says why). `web.next_undecided(api, after)` lists the documented operations nobody decided about, so a service can refuse to start with one (`examples/guarded` does). `examples/guarded` runs it;
 `tests/guarded_e2e.py` holds it to its own document; its authority report is pinned in `docs/authority-guarded.json`.
 
 A request header is `web.header_param(heap, api, op, "Idempotency-Key", node, false)`; a plain-text answer is
