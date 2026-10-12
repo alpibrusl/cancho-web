@@ -493,7 +493,7 @@ other:
 * What is enforced is what `/openapi.json` says. An operation the document lists no security for is open, as it is to a client
   reading the document; `no_auth` is how to say so on purpose when a default exists. (The older comment on `requirements` said a gate
   "should not read" an undeclared operation as open. That caution is kept as advice: declare `default_require`, and an operation
-  that forgets to say anything is protected by it. The alternative, a gate that disagrees with the document it publishes, is the
+  that forgets to say anything is protected by it, and `web.next_undecided` (§11.11) lists the ones that were not decided so a service can refuse to start. The alternative, a gate that disagrees with the document it publishes, is the
   failure this layer exists to prevent.)
 * **Credentials are data, not code.** A verifier cannot be a callback (§2). The application gives `guard` a `Tokens` table: pairs of
   (scheme name, secret). A request's bearer secret is compared with every entry; the scheme(s) it belongs to are the answer. The
@@ -657,3 +657,33 @@ header that a client is expected to send. A header parameter can have one (it is
 checks `users`, `guarded`, `users_pg` and `users_threads`. What the reports say, as pinned: all four are bounded and none reaches a foreign
 symbol. `users_pg` is the only one with `net_out` (the database) and `fs_read("/dev/urandom")` (the nonce of its login); `users_threads` is the only
 one with `conc` (its threads). That the one with a database can read exactly one file, and which, is the kind of fact the pin is for.
+
+### 11.11 What the gate of a real service showed (`cancho-hooks`, `src/authz.cho`)
+
+`cancho-hooks` is the service §8's `require` came from (26 routes, three token scopes) and it has its own gate, written before `web.guard`. Reading it
+against §11 (not changing it: that is another repository's decision) found:
+
+* **It fails closed where `guard` follows the document.** A route with no entry in its table needs the admin token, and a test lists every
+  operation the declaration makes and fails if one has no scope. §11.2 chose "an undeclared operation is open, as the document says", and that
+  is the weaker default for a service that has an opinion. Both are right for different services, and the test they wrote is the mechanism: the
+  declaration can be asked which operations nobody decided about. That is `web.next_undecided(api, after)` (new here): the first documented
+  operation after `after` that is not open and has no alternative of its own or by default; 0 if none. `examples/guarded` asks it at start-up
+  and refuses to run (exit 5) while it answers anything but 0, so it fails closed without `guard` changing what it enforces. Internal routes
+  are not asked about.
+* **Its hierarchy (admin satisfies read and ingest) is already expressible**: register the admin secret for each scheme (`web.token` of one
+  secret under several schemes opens what any of them opens, §11.3). No `implies` is needed.
+* **It leaves a scope open when its token is not configured** (a development service needs none), and `production = 1` refuses to start
+  without them. `guard` has no such mode: an operation that requires a scheme nobody holds a token for is a 401 for everyone. A development
+  mode that opens it would be a way for a missing configuration to become an open service; the cheaper answer is for the service to read its
+  configuration and, in development only, not call `guard`. Not built; the question stays open (§11.12).
+* **It compares every byte of the longest token there can be**, whichever differs first. `guard` compares the bytes of the presented one against
+  each secret, cycling a short secret: the time follows what the client sent, not the secret's length or content. Neither is constant-time.
+* **Not tried**: moving `cancho-hooks` onto `guard`. It is a 24,000-line service with its own tests for its gate.
+
+### 11.12 Open questions, added
+
+* Whether a development mode for unconfigured schemes belongs in `web` or stays the service's decision (§11.11).
+
+(`next_undecided`: one unit test with six assertions and the default-API case; four changes to it, each caught: the internal routes asked about, `no_auth`
+ignored, alternatives ignored, the search starting at `after`. The refusal to start was seen by hand, not by a test: `guarded` built with one
+`require` removed exits with status 5 and does not print `listening`.)

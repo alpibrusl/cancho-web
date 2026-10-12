@@ -1801,6 +1801,25 @@ fn same_secret[&a, &b](x: &a [byte], y: &b [byte]) -> [] bool {
     return diff == 0;
 }
 
+// The first operation after `after` (start with 0) that the document says nothing about who may call: documented, not declared open
+// (`no_auth`), and with no alternative of its own or by default. 0 when there is none. `guard` lets such an operation through, as the
+// document says; a service that would rather fail closed asks this at start-up and refuses to run while it answers anything but 0 (the
+// internal routes, such as the document itself, are not asked about: they are not part of the contract). A service that uses no security
+// at all has every operation undecided, so ask it only of one that declares some.
+pub fn next_undecided[&a](api: &a Api, after: int) -> [] int {
+    var op = after + 1;
+    if op < 1 {
+        op = 1;
+    }
+    while op <= api.ops {
+        if rec(api, op_at(api, op), 6) == 1 && !is_open(api, op) && requirements(api, op) == 0 {
+            return op;
+        }
+        op = op + 1;
+    }
+    return 0;
+}
+
 // Let a request through to the handler of `op`, or answer it. The answer is (`out`, true) for a request that may go on, and the
 // 401 or 403 appended to `out` with false for one that may not. An operation the document lists no alternative for is open, as the
 // document says. See §11.3 for what each answer means.
