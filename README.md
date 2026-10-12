@@ -25,7 +25,7 @@ responses -- and the router and the OpenAPI document both come from that declara
 so a change to the API is a change to a file). `web.dispatch` judges a request's path, query and header parameters with the
 schema nodes that document them *before* the handler runs, so the handler is not reached for a request that breaks the
 contract (`examples/users` uses it; [`docs/design.md`](docs/design.md) §9). `web.guard` enforces what the document says about who may call (bearer tokens held as data; [`docs/design.md`](docs/design.md) §11,
-`examples/guarded`). Not yet: defaults declared once ([`docs/design.md`](docs/design.md) §8 and §9.10 say what is next and why).
+`examples/guarded`). A parameter's default is declared once and lands in the slot and in the document ([`docs/design.md`](docs/design.md) §12).
 
 ## What you get
 
@@ -241,8 +241,13 @@ they were declared; the slots are learned once at start-up:
 ```
 let limit_slot = web.slot(api, op_list, "limit");          // once, by name
 ...
-if web.present(args, limit_slot) { limit = web.int_arg(args, limit_slot); }   // a valid int, 1..100: dispatch judged it
+limit = web.int_arg(args, limit_slot);   // a valid int, 1..100: dispatch judged it; 20 if the client sent none (declared once, below)
 ```
+
+A default is declared with the parameter: `web.default_int(heap, api, schema, op_list, "limit", 20)` (or `web.default_bool`). A request that
+does not send it has the default in its slot (`web.present` is still false: the client did not send it), and the document writes
+`"default": 20` into the parameter's schema. A non-negative integer or a flag only; a misuse is ignored and `web.default_of` reads
+back what took (§12).
 
 A parameter that breaks its node is a `422` that lists every error, with where it is (`/query/limit`, `/path/id`,
 `/header/Idempotency-Key`) and a code a client can switch on (`type`, `range`, `minimum`, `maximum`, `min_length`,
@@ -398,8 +403,8 @@ scripts/figures.py        draws docs/figures/bench.svg from the table in this fi
 
 Not yet built:
 
-Anything like FastAPI's dependency injection; middleware beyond `guard` and `log_line` (a request id, CORS, rate limiting); OAuth, sessions, expiry and revocation; defaults declared once
-(a handler still says what `limit` is when it is absent); `$ref`/`$defs` in the generated JSON Schema. (`dispatch` is in all
+Anything like FastAPI's dependency injection; middleware beyond `guard` and `log_line` (a request id, CORS, rate limiting); OAuth, sessions, expiry and revocation; text and negative defaults (§12.2);
+`$ref`/`$defs` in the generated JSON Schema. (`dispatch` is in all
 three services now: `users`, `users_pg` and `users_threads`; the last two were converted after the first, so a bad parameter is
 the same answer in each.) The design document says which of these are decided and which are open.
 

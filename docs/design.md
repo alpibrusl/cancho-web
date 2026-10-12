@@ -296,7 +296,7 @@ header alike, so `request[a..b]` is the value with no copy and the borrow rules 
 *judged* decoded (§9.10), and a handler that wants the decoded text decodes it, through `route.param_decoded`.
 
 A parameter that is required and absent never reaches a slot (422). An optional one with no
-default has `b = 0`, and the handler asks `web.present`. *Corrected: a default as a declaration (`web.default_int`), written to the OpenAPI schema as `default` and applied by dispatch, **is not built** (§9.10); the example keeps `default_limit()`, and it is still a second copy of a number the document does not state.*
+default has `b = 0`, and the handler asks `web.present`. *Corrected twice. First: a default as a declaration was not built with dispatch (§9.10), and the example kept `default_limit()`, a second copy of a number the document did not state. Then it was built (§12): `web.default_int`, written to the OpenAPI schema as `default` and applied by dispatch, with `present` still false for a request that did not send it.*
 
 ### 9.4 What dispatch checks, and what it answers
 
@@ -586,3 +586,67 @@ auth, API keys in a header other than `Authorization`, and mTLS are not here; th
 * **The package store was republished** (`.cancho-vcs`), as every change to `src/web.cho` needs.
 * **Not done:** the server reads a request's body before `dispatch` runs, so an unauthenticated request costs what any request costs up
   to that point. Rate limiting is not here. `users`, `users_pg` and `users_threads` declare no security and do not call `guard`.
+
+## 12. Defaults declared once
+
+Status: **built** (`web.default_int`, `web.default_bool`, `web.default_of`; the three example services use it). §12.5 says what was shown.
+
+### 12.1 The problem
+
+§9.3 left it open on purpose: a parameter that is absent has a slot of `(0, 0)`, and the handler says what that means. `examples/users` wrote
+`var limit = default_limit(); if web.present(args, limit_slot) { limit = ... }` and the document said nothing about the 20. A client reading
+`/openapi.json` could not learn that `limit` defaults to 20, and the 20 lived in three services' code, not in the declaration. It is the
+same shape as the problem of §8 and §9: a fact about the API that is true in the code and silent in the document.
+
+### 12.2 Decision: the default is part of the parameter, and the slot holds it
+
+    api = web.query_param(heap, api, op_list, "limit", limit, false);
+    api = web.default_int(heap, api, schema, op_list, "limit", 20);
+
+* **`dispatch` puts the default in the slot** of a request that does not send the parameter: `int_arg` reads 20 and the handler has no
+  `if`. **`present` stays false** (the slot's second int is 0): "the client did not send it" is still a fact a handler may want, and it is
+  not erased by a default.
+* **The document writes it** as the parameter schema's `default`, an integer or a boolean. Components and `$ref`s get the `default`
+  beside the `$ref` (allowed in OpenAPI 3.1).
+* **A default is a non-negative integer or a flag.** Defaults for text are not here (the slot of an absent text is `(-1, -1)`, an offset
+  into the request; a default would be a string stored in the declaration and a slot that points outside the request, which every
+  accessor would have to learn). Negative defaults are not here either: the value is kept in the parameter record's `required` field,
+  which was `0` or `1` and is read as `== 1` for "required" everywhere, so `2 + v` fits without widening every record. Both limits are
+  said where they bind; widening the record is the change if a negative or a text default is wanted.
+* **Misuse is ignored, and can be read back**, as `require` on an operation that does not exist is: `default_int` does nothing if the
+  parameter does not exist, is required, is a path parameter, is of the wrong kind (not an integer node, for `default_int`; not
+  a boolean node, for `default_bool`), or if the value is negative or breaks the node's range (the schema is passed to check it: a default the
+  validator would refuse is a document that contradicts itself). `web.default_of(api, op, name)` answers the default (0 or 1 for a flag) or -1, so
+  a test, or a start-up check, can fail loudly where the declaration silently did not take.
+* **A default does not excuse a bad value** (`?limit=0` is still a 422), a repeated key, or a missing required parameter: it applies to a
+  parameter that is absent and not required, nothing else.
+
+### 12.3 What it deliberately is not
+
+No defaults for request bodies (a schema's own `default` keyword is not in `cancho-schema`), no computed defaults, and no default for a
+header that a client is expected to send. A header parameter can have one (it is optional); the example services do not use that.
+
+### 12.4 Open questions
+
+* Whether text defaults are wanted badly enough to widen the record and teach the slot a second kind of text.
+* Whether `default_of` should be an assertion helper (`web.expect_default`) so a service can say "this must have taken" in one line.
+
+### 12.5 What was shown
+
+* **Unit test (`tests/web_test.cho`, one new, 20 in all):** the default is in the slot of a request that omits the parameter and `present`
+  says it was not sent; a sent value, including one equal to the default, is the value and `present`; `?limit=0` and a missing required
+  parameter are still refused; a text node, a required parameter, a value outside the node's range (10 on 0..9), a negative value, an
+  unknown parameter and an unknown operation are all ignored and read back as -1; the document writes `"default":20` and `"default":true` and
+  nothing for the parameters without one.
+* **The three services use it** (`default_limit()` is gone from each) and their served documents differ from the committed ones by that one
+  line (`"default": 20`, which is also committed). The `users` suite (35 tests; 8 need PostgreSQL) passes, and the `users_pg` suite passes
+  blocking and with a pool of 4; Schemathesis, which generates its requests from the document, runs with the default in it.
+* Schemathesis reports a few cases as "errored" in some runs (1 to 3 of about 730) with "No issues found", also before this change; those
+  are cases the tool could not send (it reports that it cannot put a NUL byte in a header), not answers of the service. Not investigated further.
+* **What it costs, measured:** `GET /users` (the page, with no `limit`, so the new branch runs) on the `users` service built from `main`
+  against the one built with defaults, one core, alternating, six rounds of four seconds. Medians 65,700 a second before and 64,600 after, about
+  2% lower; the ranges overlap (64,300 to 70,300 before, 62,400 to 66,900 after) and the machine moves by about that much. One VM. Not
+  distinguishable from free by this measurement, and not shown to be free either.
+* **Mutations.** Nine changes each fail a test: the default not applied, `present` set by a default, the range not checked, a required
+  parameter given a default, a negative value accepted, the document without the `default`, a boolean written as an integer, a text node
+  accepted, and `default_of` off by one.

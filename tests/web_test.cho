@@ -919,3 +919,76 @@ fn test_log_line_leaves_out_the_query_and_cuts_the_path[&h](heap: &!h Heap) -> [
     buffer.drop(heap, long);
     return 0;
 }
+
+// ---------------------------------------------------------------------
+// Defaults declared once (docs/design.md section 12)
+// ---------------------------------------------------------------------
+
+// /d  ?limit 1..100 default 20   ?offset 0..1000   ?flag bool default true   ?note text   ?need 0..9 required   ?big 0..9   (slots 0..5)
+fn defaults_api[&h](heap: &!h Heap) -> [heap] (web.Api, schema.Schema) {
+    var s = schema.empty(heap);
+    let (s1, limit) = schema.new_int(heap, s, 1, 100);
+    let (s2, offset) = schema.new_int(heap, s1, 0, 1000);
+    let (s3, flag) = schema.new_bool(heap, s2);
+    let (s4, note) = schema.new_string(heap, s3, 1, 8);
+    let (s5, need) = schema.new_int(heap, s4, 0, 9);
+    let (s6, big) = schema.new_int(heap, s5, 0, 9);
+    var api = web.empty(heap);
+    let (a1, d) = web.operation(heap, api, "GET", "/d", "d");
+    api = web.query_param(heap, a1, d, "limit", limit, false);
+    api = web.query_param(heap, api, d, "offset", offset, false);
+    api = web.query_param(heap, api, d, "flag", flag, false);
+    api = web.query_param(heap, api, d, "note", note, false);
+    api = web.query_param(heap, api, d, "need", need, true);
+    api = web.query_param(heap, api, d, "big", big, false);
+    borrow s6 as &sr in {
+        api = web.default_int(heap, api, sr, d, "limit", 20);
+        api = web.default_bool(heap, api, sr, d, "flag", true);
+        // These are ignored: a text node, a required parameter, a value outside the node's range, a negative value, no such parameter, no such operation.
+        api = web.default_int(heap, api, sr, d, "note", 3);
+        api = web.default_int(heap, api, sr, d, "need", 3);
+        api = web.default_int(heap, api, sr, d, "big", 10);
+        api = web.default_int(heap, api, sr, d, "offset", 0 - 1);
+        api = web.default_int(heap, api, sr, d, "nope", 1);
+        api = web.default_int(heap, api, sr, 99, "limit", 1);
+    }
+    return (api, s6);
+}
+
+fn test_a_default_is_declared_once_and_read_from_the_slot[&h](heap: &!h Heap) -> [heap] int {
+    let (api, s) = defaults_api(heap);
+    borrow api as &ar in {
+        borrow s as &sr in {
+            // What was declared, and what was ignored.
+            test.assert_eq(web.default_of(ar, 1, "limit"), 20);
+            test.assert_eq(web.default_of(ar, 1, "flag"), 1);
+            test.assert_eq(web.default_of(ar, 1, "offset"), 0 - 1);
+            test.assert_eq(web.default_of(ar, 1, "note"), 0 - 1);
+            test.assert_eq(web.default_of(ar, 1, "need"), 0 - 1);
+            test.assert_eq(web.default_of(ar, 1, "big"), 0 - 1);
+            test.assert_eq(web.default_of(ar, 1, "nope"), 0 - 1);
+            test.assert_eq(web.default_of(ar, 99, "limit"), 0 - 1);
+            // Absent: the slot holds the default and `present` stays false (its second int is 0); the others are as they were.
+            is(heap, ar, sr, "GET /d?need=1 HTTP/1.0\r\n\r\n", 6, "1|20,0|0,0|1,0|-1,-1|1,1|0,0");
+            // Sent: the value and 1, whatever the default is.
+            is(heap, ar, sr, "GET /d?need=1&limit=5&flag=false HTTP/1.0\r\n\r\n", 6, "1|5,1|0,0|0,1|-1,-1|1,1|0,0");
+            is(heap, ar, sr, "GET /d?need=1&limit=20 HTTP/1.0\r\n\r\n", 6, "1|20,1|0,0|1,0|-1,-1|1,1|0,0");
+            // A default does not excuse a bad value, a missing required parameter or a repeated key.
+            refused(heap, ar, sr, "GET /d?need=1&limit=0 HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/query/limit\",\"code\":\"minimum\",\"detail\":\"is below the minimum\"}");
+            refused(heap, ar, sr, "GET /d HTTP/1.0\r\n\r\n", 1, "{\"pointer\":\"/query/need\",\"code\":\"required\",\"detail\":\"is required\"}");
+            // And the document writes what was declared, and only that.
+            let doc = web.openapi(heap, ar, sr, "T", "1");
+            borrow doc as &db in {
+                let text = buffer.bytes(db);
+                test.assert(index_of(text, "{\"name\":\"limit\",\"in\":\"query\",\"required\":false,\"schema\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100,\"default\":20}}") > 0);
+                test.assert(index_of(text, "{\"name\":\"flag\",\"in\":\"query\",\"required\":false,\"schema\":{\"type\":\"boolean\",\"default\":true}}") > 0);
+                test.assert(index_of(text, "\"name\":\"offset\",\"in\":\"query\",\"required\":false,\"schema\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":1000}}") > 0);
+                test.assert(index_of(text, "\"name\":\"big\",\"in\":\"query\",\"required\":false,\"schema\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":9}}") > 0);
+            }
+            buffer.drop(heap, doc);
+        }
+    }
+    web.drop(heap, api);
+    schema.drop(heap, s);
+    return 0;
+}
