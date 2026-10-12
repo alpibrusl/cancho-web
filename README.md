@@ -338,6 +338,7 @@ The real binary on a real socket, a real HTTP client, and:
 cancho test tests/web_test.cho src/web.cho build/deps/*.cho --std   # `web` unit tests (after a build has fetched build/deps)
 benches/check.sh                  # the Go and C implementations still do the same work (seconds)
 scripts/check-authority.sh        # what the service can touch (`cancho authority`) is the pinned docs/authority.json
+EXAMPLE=users_pg scripts/check-authority.sh   # likewise for users_pg, users_threads, guarded (docs/authority-<name>.json)
 ```
 
 CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) builds the pinned compiler and
@@ -384,6 +385,8 @@ examples/users/openapi.json  the contract as a file, checked against what the se
 scripts/build.sh          fetch + verify the locked packages, then build
 scripts/check-authority.sh  the service's `cancho authority` report against docs/authority.json (CI fails when it changes)
 docs/authority.json       what the users service can touch, as last approved: effects, bounds, foreign symbols
+docs/authority-*.json     the same for guarded, users_pg (it adds `net_out` and `fs_read("/dev/urandom")`: the database and a login nonce) and
+                          users_threads (it adds `conc`); none has a foreign symbol
 deps/*.lock               the packages this builds against, pinned by hash
 tests/e2e.py              the end-to-end tests (real binary, real sockets, Schemathesis)
 examples/guarded/         `web.guard` and `web.log_line` on a socket; tests/guarded_e2e.py holds it to its document

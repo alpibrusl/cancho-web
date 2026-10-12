@@ -8,7 +8,8 @@
 #   scripts/check-authority.sh --update    write docs/authority.json (after reading what changed)
 #
 #   CANCHO   the compiler (default: cancho on PATH; the revision ci.yml builds with)
-#   EXAMPLE  which service (default: users, pinned in docs/authority.json; `guarded` is pinned in docs/authority-guarded.json)
+#   EXAMPLE  which service (default: users, pinned in docs/authority.json; any other, e.g. `guarded`, `users_pg`, `users_threads`, in
+#            docs/authority-<name>.json). All of examples/<name>/*.cho is analysed with it.
 #
 # The program is examples/users/users.cho, src/web.cho and the packages that `scripts/build.sh` fetched into build/deps (run a build first).
 # What is left out of the pinned file: the list of provably pure functions and the three counts (`folded_operators`, `folded_calls`,
@@ -30,7 +31,7 @@ cd "$here"
 ls build/deps/*.cho >/dev/null 2>&1 || { echo "check-authority: no build/deps; run scripts/build.sh first" >&2; exit 2; }
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-"$CANCHO" authority examples/$EXAMPLE/$EXAMPLE.cho src/web.cho build/deps/*.cho --std --output json > "$work/raw.json"
+"$CANCHO" authority examples/$EXAMPLE/*.cho src/web.cho build/deps/*.cho --std --output json > "$work/raw.json"
 python3 - "$work/raw.json" > "$work/report.json" <<'PY'
 import json, sys
 report = json.load(open(sys.argv[1]))

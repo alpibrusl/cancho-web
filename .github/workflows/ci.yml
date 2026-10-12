@@ -141,6 +141,8 @@ jobs:
         run: |
           scripts/check-authority.sh
           EXAMPLE=guarded scripts/check-authority.sh
+          EXAMPLE=users_pg scripts/check-authority.sh
+          EXAMPLE=users_threads scripts/check-authority.sh
 
       # `web.guard` and `web.log_line` on a real socket: examples/guarded (docs/design.md section 11).
       - name: The guarded example

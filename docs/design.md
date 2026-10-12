@@ -650,3 +650,10 @@ header that a client is expected to send. A header parameter can have one (it is
 * **Mutations.** Nine changes each fail a test: the default not applied, `present` set by a default, the range not checked, a required
   parameter given a default, a negative value accepted, the document without the `default`, a boolean written as an integer, a text node
   accepted, and `default_of` off by one.
+
+### 11.10 Authority is pinned for every example service
+
+`scripts/check-authority.sh` took only `users`; `EXAMPLE=<name>` now pins any of them (all of `examples/<name>/*.cho` is analysed), and CI
+checks `users`, `guarded`, `users_pg` and `users_threads`. What the reports say, as pinned: all four are bounded and none reaches a foreign
+symbol. `users_pg` is the only one with `net_out` (the database) and `fs_read("/dev/urandom")` (the nonce of its login); `users_threads` is the only
+one with `conc` (its threads). That the one with a database can read exactly one file, and which, is the kind of fact the pin is for.
