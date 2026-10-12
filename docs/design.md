@@ -563,9 +563,13 @@ auth, API keys in a header other than `Authorization`, and mTLS are not here; th
   either opens; the word `bearer` in any case, several spaces, trailing white space and a lower-case header name are read; the
   document's default applies, `no_auth` and an operation's own `require` beat it; `log_line` leaves the query out, reads the status
   from the response and cuts a 281-byte path to 200.
-* **Mutations.** Ten changes to `guard`, `bearer`, `same_secret` and `log_line` each fail a test: the scheme check skipped, the length
+* **Mutations.** Ten changes to `guard`, `bearer`, `same_secret` and `log_line` were tried: the scheme check skipped, the length
   not compared, the word's case compared, trailing white space kept, the 403 as a 401, an undeclared operation closed, only the first
-  token read, the path cut moved, the space after the word not required, and the `invalid_token` flag inverted.
+  token read, the path cut moved, the space after the word not required, and the `invalid_token` flag inverted. *Corrected (§12.5): this
+  bullet first said all ten were caught. The script that ran them decided "caught" by looking for the word `error` in the output, and one
+  existing test is called `..._and_the_error_response`, so every mutation looked caught. Run again with the test run's own result: nine
+  fail a test, and one survived, "trailing white space kept": `http.parse` already takes it off a header's value, so the code that trimmed
+  it did nothing and has been removed (`bearer` says so).*
 * **On a socket (`tests/guarded_e2e.py`, nine tests, in CI):** `examples/guarded` with two schemes. Every status it answers is a status
   the served document declares for that operation (401 and 403 are declared with `respond_problem`); the document's `security`
   entries say what the gate does; the log has the path and never a query string or a token (the test puts a token in a query).
@@ -589,7 +593,7 @@ auth, API keys in a header other than `Authorization`, and mTLS are not here; th
 
 ## 12. Defaults declared once
 
-Status: **built** (`web.default_int`, `web.default_bool`, `web.default_of`; the three example services use it). §12.5 says what was shown.
+Status: **built** (`web.default_int`, `web.default_bool`, `web.default_text`, and `web.has_default`, `web.default_of`, `web.default_text_of` to read them back; the three example services use it for `limit`). Negative and text defaults were added afterwards (§12.6). §12.5 says what was shown.
 
 ### 12.1 The problem
 
@@ -608,16 +612,16 @@ same shape as the problem of §8 and §9: a fact about the API that is true in t
   not erased by a default.
 * **The document writes it** as the parameter schema's `default`, an integer or a boolean. Components and `$ref`s get the `default`
   beside the `$ref` (allowed in OpenAPI 3.1).
-* **A default is a non-negative integer or a flag.** Defaults for text are not here (the slot of an absent text is `(-1, -1)`, an offset
-  into the request; a default would be a string stored in the declaration and a slot that points outside the request, which every
-  accessor would have to learn). Negative defaults are not here either: the value is kept in the parameter record's `required` field,
-  which was `0` or `1` and is read as `== 1` for "required" everywhere, so `2 + v` fits without widening every record. Both limits are
-  said where they bind; widening the record is the change if a negative or a text default is wanted.
+* **A default is an integer, a flag or a text** (*corrected: it was first a non-negative integer or a flag only; §12.6*). The value is kept
+  in the parameter record's `required` field, which was `0` or `1` and is read as `== 1` for "required" everywhere, so nothing was widened.
+  An integer is zigzag-coded in it, so a negative one fits; a text is a record of its own, which the field points at. A text default is not
+  in the slot (a text slot is where the value is in the request) and is read with `default_text_of`.
 * **Misuse is ignored, and can be read back**, as `require` on an operation that does not exist is: `default_int` does nothing if the
   parameter does not exist, is required, is a path parameter, is of the wrong kind (not an integer node, for `default_int`; not
-  a boolean node, for `default_bool`), or if the value is negative or breaks the node's range (the schema is passed to check it: a default the
-  validator would refuse is a document that contradicts itself). `web.default_of(api, op, name)` answers the default (0 or 1 for a flag) or -1, so
-  a test, or a start-up check, can fail loudly where the declaration silently did not take.
+  a boolean node, for `default_bool`), or if the value breaks the node's range, length or choices (the schema is passed to check it: a default the
+  validator would refuse is a document that contradicts itself). `web.has_default(api, op, name)` says whether it took, so
+  a test, or a start-up check, can fail loudly where the declaration silently did not. (`default_of` first answered -1 for none; with negative
+  defaults -1 is a value, so it answers 0 for none and `has_default` is how to ask.)
 * **A default does not excuse a bad value** (`?limit=0` is still a 422), a repeated key, or a missing required parameter: it applies to a
   parameter that is absent and not required, nothing else.
 
@@ -628,7 +632,7 @@ header that a client is expected to send. A header parameter can have one (it is
 
 ### 12.4 Open questions
 
-* Whether text defaults are wanted badly enough to widen the record and teach the slot a second kind of text.
+* Whether a text default should be placed where the handler can read it without an `if present` (it cannot be in the slot, §12.6).
 * Whether `default_of` should be an assertion helper (`web.expect_default`) so a service can say "this must have taken" in one line.
 
 ### 12.5 What was shown
@@ -647,9 +651,7 @@ header that a client is expected to send. A header parameter can have one (it is
   against the one built with defaults, one core, alternating, six rounds of four seconds. Medians 65,700 a second before and 64,600 after, about
   2% lower; the ranges overlap (64,300 to 70,300 before, 62,400 to 66,900 after) and the machine moves by about that much. One VM. Not
   distinguishable from free by this measurement, and not shown to be free either.
-* **Mutations.** Nine changes each fail a test: the default not applied, `present` set by a default, the range not checked, a required
-  parameter given a default, a negative value accepted, the document without the `default`, a boolean written as an integer, a text node
-  accepted, and `default_of` off by one.
+* **Mutations (corrected in §12.6).** Nine changes were tried, then 22 more with the corrected script (§12.6); see there.
 
 ### 11.10 Authority is pinned for every example service
 
@@ -684,6 +686,22 @@ against §11 (not changing it: that is another repository's decision) found:
 
 * Whether a development mode for unconfigured schemes belongs in `web` or stays the service's decision (§11.11).
 
-(`next_undecided`: one unit test with six assertions and the default-API case; four changes to it, each caught: the internal routes asked about, `no_auth`
+(`next_undecided`: one unit test with six assertions and the default-API case; four changes to it, each caught (checked again with the corrected script of §12.5): the internal routes asked about, `no_auth`
 ignored, alternatives ignored, the search starting at `after`. The refusal to start was seen by hand, not by a test: `guarded` built with one
 `require` removed exits with status 5 and does not print `listening`.)
+
+### 12.6 Negative and text defaults, and a mutation script that did not work
+
+* **Built.** `default_int` takes a negative value if the node allows it (`-3` on `-10..10`; `-11` is refused); `default_text` takes a text
+  the node accepts (its length, its choices, no NUL) and `default_text_of` reads it; the document writes `"default": -3` and `"default": "asc"`,
+  with a text escaped (`"a\"b"`). Two unit tests cover it (22 in all): the slot of a negative default, the absent slot and `present` of a text
+  default, a choice that is not one of the node's, an empty text and a too long one, a text on an integer node, a text on a required parameter,
+  and the document for each.
+* **The mutation checks of §11.9 and §12.5 were wrong, and are corrected here.** The script that ran them decided a mutation was caught if the
+  word `error` appeared in the test output, and an existing test is named `test_security_schemes_..._and_the_error_response`, so every mutation looked
+  caught. Re-run with the exit status and `FAILED` (28 mutations of `guard`, `bearer`, `next_undecided` and the defaults): 25 fail a test,
+  one did not compile (a bad mutation, replaced by another), and **two survived**: "trailing white space kept", which was dead code
+  (`http.parse` trims it; the code is removed, §11.9), and a text default accepted on a *required* parameter, which had no test (it has one now,
+  the parameter `must`). With those two dealt with, the final run of 27 mutations has every one caught. The mutation lists of §9.10 (twenty on
+  `dispatch`) were run by older scripts that read the result lines (`FAILED` and `test result`), not the word `error`, and are not in question.
+* **Not done:** a way to read a text default without `present` (§12.4).

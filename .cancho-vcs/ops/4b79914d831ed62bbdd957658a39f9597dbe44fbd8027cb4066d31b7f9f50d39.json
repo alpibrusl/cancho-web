@@ -1,9 +1,9 @@
 {
-  "op_id": "2b119ea7fe156939f6e58a90172adc5eaf488cc0b3828f40a5c9b439c6fa0956",
+  "op_id": "4b79914d831ed62bbdd957658a39f9597dbe44fbd8027cb4066d31b7f9f50d39",
   "operation": {
     "kind": "AddFunction",
     "sig_id": "ec4a81676b2581617072844a8f1af2af6d9b8ce514436adf45c9efb47d078c18",
-    "stage_id": "af39e49e9923b79a7d4e0e18d6b806e9d12bf76b23e313d0d6b201c7ba1b4500",
+    "stage_id": "282fd12131c1fd24adecd5b1c6dbeb6fd0d535f36accd1e63b7bb5d9f64cf027",
     "effects": [
       "heap"
     ],
