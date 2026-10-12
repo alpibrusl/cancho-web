@@ -345,8 +345,30 @@ fn find_param[&a, &n](api: &a Api, op: int, name: &n [byte]) -> [] int {
     return 0 - 1;
 }
 
-// A default is kept in the parameter record's `required` field: 0 optional, 1 required, 2 + v a default of v (v >= 0: an integer
-// or a flag). The field is read as `== 1` for "required" everywhere, so a default is never required.
+// A default is kept in the parameter record's `required` field, which is read as `== 1` for "required" everywhere:
+//   0 optional, no default      1 required      >= 2 an integer or flag default, zigzag-coded (2 + zig(v): 0, -1, 1, -2 ... are 0, 1, 2, 3 ...)
+//   <= -2 a text default: the record at index -2 - field has it (`text_default`: 12, the parameter's record, text_off, text_len)
+// so a default is never required, and nothing had to be widened.
+fn zig(v: int) -> [] int {
+    if v >= 0 {
+        return 2 * v;
+    }
+    return 0 - 2 * v - 1;
+}
+
+fn unzig(z: int) -> [] int {
+    let half = z / 2;
+    if z - 2 * half == 0 {
+        return half;
+    }
+    return 0 - half - 1;
+}
+
+fn tag_text_default() -> [] int {
+    return 12;
+}
+
+// Set the default of the optional parameter `name` of `op` to the integer or flag `value`, if the parameter can have it.
 fn set_default[&h, &s, &n](heap: &!h Heap, a: Api, sc: &s schema.Schema, op: int, name: &n [byte], value: int, flag: bool) -> [heap] Api {
     var at = 0 - 1;
     var current = 0;
@@ -358,18 +380,24 @@ fn set_default[&h, &s, &n](heap: &!h Heap, a: Api, sc: &s schema.Schema, op: int
             node = rec(ar, at, 5);
         }
     }
-    if at < 0 || value < 0 || current == 1 {
+    if at < 0 || current == 1 {
         return a;
     }
     if flag {
-        if !schema.is_bool(sc, node) || value > 1 {
+        if !schema.is_bool(sc, node) || value < 0 || value > 1 {
             return a;
         }
     } else {
         if !schema.is_int(sc, node) {
             return a;
         }
-        let digits = buffer.push_nat(heap, buffer.empty(heap, 24), value);
+        var digits = buffer.empty(heap, 24);
+        if value < 0 {
+            digits = buffer.push(heap, digits, byte_of(45));
+            digits = buffer.push_nat(heap, digits, 0 - value);
+        } else {
+            digits = buffer.push_nat(heap, digits, value);
+        }
         var bad = 1;
         borrow digits as &db in {
             bad = schema.check_text(sc, node, buffer.bytes(db));
@@ -382,15 +410,15 @@ fn set_default[&h, &s, &n](heap: &!h Heap, a: Api, sc: &s schema.Schema, op: int
     let Api { router, recs, text, ops, index } = a;
     var rd = recs;
     borrow mut rd as &!rw in {
-        vec.set(rw, at + 6, 2 + value);
+        vec.set(rw, at + 6, 2 + zig(value));
     }
     return Api { router: router, recs: rd, text: text, ops: ops, index: index };
 }
 
 // The optional integer query or header parameter `name` of `op` is `value` when the request does not send it: `dispatch` puts it in the
 // slot (`int_arg` reads it; `present` still says the client did not send it), and the document writes it as the schema's `default`. It
-// is declared once, here, and the handler no longer says it. Ignored (read it back with `default_of`) if there is no such parameter, it is
-// required, it is not an integer node, or `value` is negative or breaks the node's range.
+// is declared once, here, and the handler no longer says it. Ignored (ask `has_default`) if there is no such parameter, it is required,
+// it is not an integer node, or `value` breaks the node's range. A negative value is fine if the node allows it.
 pub fn default_int[&h, &s, &n](heap: &!h Heap, a: Api, sc: &s schema.Schema, op: int, name: &n [byte], value: int) -> [heap] Api {
     return set_default(heap, a, sc, op, name, value, false);
 }
@@ -403,13 +431,62 @@ pub fn default_bool[&h, &s, &n](heap: &!h Heap, a: Api, sc: &s schema.Schema, op
     return set_default(heap, a, sc, op, name, 0, true);
 }
 
-// The default declared for the parameter `name` of `op` (0 or 1 for a flag), or -1 if there is none.
+// The optional string query or header parameter `name` of `op` has the default `value`. Unlike an integer, a text cannot be put in the slot
+// (a text slot is where the value is in the request), so the slot of a request that omits it is still absent (`present` is false) and the
+// handler reads the declared text with `default_text_of`; the document writes it as the schema's `default`. Ignored if there is no such
+// parameter, it is required, it is not a string node, or the node would refuse `value` (its length, its choices).
+pub fn default_text[&h, &s, &n, &x](heap: &!h Heap, a: Api, sc: &s schema.Schema, op: int, name: &n [byte], value: &x [byte]) -> [heap] Api {
+    var at = 0 - 1;
+    var current = 0;
+    var node = 0;
+    var here = 0;
+    borrow a as &ar in {
+        at = find_param(ar, op, name);
+        if at >= 0 {
+            current = rec(ar, at, 6);
+            node = rec(ar, at, 5);
+        }
+        here = vec.size(ar.recs);
+    }
+    if at < 0 || current == 1 || !schema.is_string(sc, node) || schema.check_text(sc, node, value) != 0 {
+        return a;
+    }
+    let Api { router, recs, text, ops, index } = a;
+    let (t, off) = text_add(heap, text, value);
+    var rd = put_rec(heap, recs, tag_text_default(), at, off, len(value), 0, 0, 0, 0);
+    borrow mut rd as &!rw in {
+        vec.set(rw, at + 6, 0 - 2 - here);
+    }
+    return Api { router: router, recs: rd, text: t, ops: ops, index: index };
+}
+
+// Whether the parameter `name` of `op` has a default.
+pub fn has_default[&a, &n](api: &a Api, op: int, name: &n [byte]) -> [] bool {
+    let at = find_param(api, op, name);
+    if at < 0 {
+        return false;
+    }
+    let f = rec(api, at, 6);
+    return f >= 2 || f <= 0 - 2;
+}
+
+// The integer (or 0/1 for a flag) default declared for the parameter `name` of `op`; 0 if there is none or it is a text (`has_default` tells).
 pub fn default_of[&a, &n](api: &a Api, op: int, name: &n [byte]) -> [] int {
     let at = find_param(api, op, name);
     if at < 0 || rec(api, at, 6) < 2 {
-        return 0 - 1;
+        return 0;
     }
-    return rec(api, at, 6) - 2;
+    return unzig(rec(api, at, 6) - 2);
+}
+
+// The text default declared for the parameter `name` of `op`; an empty text if there is none.
+pub fn default_text_of[&a, &n](api: &a Api, op: int, name: &n [byte]) -> [] &a [byte] {
+    let at = find_param(api, op, name);
+    if at < 0 || rec(api, at, 6) > 0 - 2 {
+        return text_of(api, 0, 0);
+    }
+    let r = 0 - 2 - rec(api, at, 6);
+    return text_of(api, rec(api, r, 2), rec(api, r, 3));
 }
 
 // A description of the parameter called `name` (path, query or header, whichever `op` declared), written as its `description`.
@@ -911,7 +988,7 @@ fn check_param[&a, &s, &q, &t, &p, &g, &x](api: &a Api, sc: &s schema.Schema, i:
         }
         // Declared once (`default_int`): the slot holds it, and `present` stays false.
         if rec(api, i, 6) >= 2 {
-            va = rec(api, i, 6) - 2;
+            va = unzig(rec(api, i, 6) - 2);
             vb = 0;
         }
     } else if twice {
@@ -1187,19 +1264,39 @@ fn has_component[&a, &n](api: &a Api, name: &n [byte]) -> [] bool {
 // `"schema": ...` for `node`: a `$ref` if it is a component, else the generated JSON
 // Schema inline.
 fn put_schema[&h, &a, &s](heap: &!h Heap, w: json.Writer, api: &a Api, sc: &s schema.Schema, node: int) -> [heap] json.Writer {
-    return put_schema_with(heap, w, api, sc, node, 0 - 1);
+    return put_schema_with(heap, w, api, sc, node, "");
 }
 
-// `dflt` >= 0 adds `"default"`: an integer, or a boolean for a boolean node.
-fn put_default[&h, &s](heap: &!h Heap, w: json.Writer, sc: &s schema.Schema, node: int, dflt: int) -> [heap] json.Writer {
-    var o = json.put_key(heap, w, "default");
-    if schema.is_bool(sc, node) {
-        return json.put_bool(heap, o, dflt == 1);
+// The JSON text of the default of the parameter record `i` (`5`, `-3`, `true`, `"asc"`), or an empty buffer if it has none.
+fn default_literal[&h, &a, &s](heap: &!h Heap, api: &a Api, sc: &s schema.Schema, i: int) -> [heap] buffer.Buffer {
+    let f = rec(api, i, 6);
+    var b = buffer.empty(heap, 16);
+    if f >= 2 {
+        let v = unzig(f - 2);
+        if schema.is_bool(sc, rec(api, i, 5)) {
+            if v == 1 {
+                return buffer.append(heap, b, "true");
+            }
+            return buffer.append(heap, b, "false");
+        }
+        if v < 0 {
+            b = buffer.push(heap, b, byte_of(45));
+            return buffer.push_nat(heap, b, 0 - v);
+        }
+        return buffer.push_nat(heap, b, v);
     }
-    return json.put_int(heap, o, dflt);
+    if f <= 0 - 2 {
+        let r = 0 - 2 - f;
+        buffer.drop(heap, b);
+        var w = json.writer(heap, 32);
+        w = json.put_string(heap, w, text_of(api, rec(api, r, 2), rec(api, r, 3)));
+        return json.finish(w);
+    }
+    return b;
 }
 
-fn put_schema_with[&h, &a, &s](heap: &!h Heap, w: json.Writer, api: &a Api, sc: &s schema.Schema, node: int, dflt: int) -> [heap] json.Writer {
+// `"schema": ...` for `node`, with `"default": <literal>` in it if `literal` is not empty.
+fn put_schema_with[&h, &a, &s, &l](heap: &!h Heap, w: json.Writer, api: &a Api, sc: &s schema.Schema, node: int, literal: &l [byte]) -> [heap] json.Writer {
     var o = json.put_key(heap, w, "schema");
     let c = comp_of(api, node);
     if c >= 0 {
@@ -1211,13 +1308,14 @@ fn put_schema_with[&h, &a, &s](heap: &!h Heap, w: json.Writer, api: &a Api, sc: 
             o = json.put_string(heap, o, buffer.bytes(tb));
         }
         buffer.drop(heap, target);
-        if dflt >= 0 {
-            o = put_default(heap, o, sc, node, dflt);
+        if len(literal) > 0 {
+            o = json.put_key(heap, o, "default");
+            o = json.put_fragment(heap, o, literal);
         }
         return json.end_object(heap, o);
     }
     let fragment = schema.json_schema(heap, sc, node);
-    if dflt < 0 {
+    if len(literal) == 0 {
         borrow fragment as &fb in {
             o = json.put_fragment(heap, o, buffer.bytes(fb));
         }
@@ -1231,15 +1329,7 @@ fn put_schema_with[&h, &a, &s](heap: &!h Heap, w: json.Writer, api: &a Api, sc: 
     }
     buffer.drop(heap, fragment);
     joined = buffer.append(heap, joined, ",\"default\":");
-    if schema.is_bool(sc, node) {
-        if dflt == 1 {
-            joined = buffer.append(heap, joined, "true");
-        } else {
-            joined = buffer.append(heap, joined, "false");
-        }
-    } else {
-        joined = buffer.push_nat(heap, joined, dflt);
-    }
+    joined = buffer.append(heap, joined, literal);
     joined = buffer.append(heap, joined, "}");
     borrow joined as &jb in {
         o = json.put_fragment(heap, o, buffer.bytes(jb));
@@ -1324,11 +1414,11 @@ fn put_param[&h, &a, &s](heap: &!h Heap, w: json.Writer, api: &a Api, sc: &s sch
         o = json.put_key(heap, o, "description");
         o = json.put_string(heap, o, text_of(api, rec(api, n, 4), rec(api, n, 5)));
     }
-    var dflt = 0 - 1;
-    if rec(api, i, 6) >= 2 {
-        dflt = rec(api, i, 6) - 2;
+    let literal = default_literal(heap, api, sc, i);
+    borrow literal as &lb in {
+        o = put_schema_with(heap, o, api, sc, rec(api, i, 5), buffer.bytes(lb));
     }
-    o = put_schema_with(heap, o, api, sc, rec(api, i, 5), dflt);
+    buffer.drop(heap, literal);
     return json.end_object(heap, o);
 }
 
@@ -1723,8 +1813,8 @@ fn lower_byte(c: int) -> [] int {
 }
 
 // The secret of an `Authorization: Bearer <secret>` header, or an empty text if there is none, it is another scheme, or the
-// secret is empty. The word `Bearer` is case-insensitive and one or more spaces follow it (RFC 9110 §11.1); trailing spaces and
-// tabs are not part of the secret.
+// secret is empty. The word `Bearer` is case-insensitive and one or more spaces follow it (RFC 9110 §11.1). Trailing white space is not part of
+// the secret: `http.parse` has already taken it off the header's value (a trim here changed no test, so it was removed).
 pub fn bearer[&q, &t](request: &q [byte], table: &t [int]) -> [] &q [byte] {
     let v = http.header(request, table, "authorization");
     var at = 0;
@@ -1744,11 +1834,7 @@ pub fn bearer[&q, &t](request: &q [byte], table: &t [int]) -> [] &q [byte] {
     while at < len(v) && int_of(v[at]) == 32 {
         at = at + 1;
     }
-    var end = len(v);
-    while end > at && (int_of(v[end - 1]) == 32 || int_of(v[end - 1]) == 9) {
-        end = end - 1;
-    }
-    return v[at..end];
+    return v[at..len(v)];
 }
 
 // 401: no credential, or none that is known (`invalid`).

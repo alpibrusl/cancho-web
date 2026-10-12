@@ -946,7 +946,7 @@ fn defaults_api[&h](heap: &!h Heap) -> [heap] (web.Api, schema.Schema) {
     borrow s6 as &sr in {
         api = web.default_int(heap, api, sr, d, "limit", 20);
         api = web.default_bool(heap, api, sr, d, "flag", true);
-        // These are ignored: a text node, a required parameter, a value outside the node's range, a negative value, no such parameter, no such operation.
+        // These are ignored: a text node, a required parameter, a value outside the node's range (10 on 0..9, -1 on 0..1000), no such parameter, no such operation.
         api = web.default_int(heap, api, sr, d, "note", 3);
         api = web.default_int(heap, api, sr, d, "need", 3);
         api = web.default_int(heap, api, sr, d, "big", 10);
@@ -962,14 +962,16 @@ fn test_a_default_is_declared_once_and_read_from_the_slot[&h](heap: &!h Heap) ->
     borrow api as &ar in {
         borrow s as &sr in {
             // What was declared, and what was ignored.
+            test.assert(web.has_default(ar, 1, "limit"));
             test.assert_eq(web.default_of(ar, 1, "limit"), 20);
+            test.assert(web.has_default(ar, 1, "flag"));
             test.assert_eq(web.default_of(ar, 1, "flag"), 1);
-            test.assert_eq(web.default_of(ar, 1, "offset"), 0 - 1);
-            test.assert_eq(web.default_of(ar, 1, "note"), 0 - 1);
-            test.assert_eq(web.default_of(ar, 1, "need"), 0 - 1);
-            test.assert_eq(web.default_of(ar, 1, "big"), 0 - 1);
-            test.assert_eq(web.default_of(ar, 1, "nope"), 0 - 1);
-            test.assert_eq(web.default_of(ar, 99, "limit"), 0 - 1);
+            test.assert(!web.has_default(ar, 1, "offset"));
+            test.assert(!web.has_default(ar, 1, "note"));
+            test.assert(!web.has_default(ar, 1, "need"));
+            test.assert(!web.has_default(ar, 1, "big"));
+            test.assert(!web.has_default(ar, 1, "nope"));
+            test.assert(!web.has_default(ar, 99, "limit"));
             // Absent: the slot holds the default and `present` stays false (its second int is 0); the others are as they were.
             is(heap, ar, sr, "GET /d?need=1 HTTP/1.0\r\n\r\n", 6, "1|20,0|0,0|1,0|-1,-1|1,1|0,0");
             // Sent: the value and 1, whatever the default is.
@@ -1011,5 +1013,74 @@ fn test_next_undecided_finds_what_the_document_does_not_say[&h](heap: &!h Heap) 
         test.assert_eq(web.next_undecided(ar, 99), 0);
     }
     web.drop(heap, a2);
+    return 0;
+}
+
+// /n  ?delta -10..10 default -3   ?low -10..10 default -11 (out of range)   ?sort one of asc|desc default "asc"   ?tag 1..8 chars default "a\"b"
+//     ?bad 1..8 chars (defaults "" and "123456789" are refused)   ?num 0..9 (a text default on an integer node)        (slots 0..5)
+fn defaults_more_api[&h](heap: &!h Heap) -> [heap] (web.Api, schema.Schema) {
+    var s = schema.empty(heap);
+    let (s1, delta) = schema.new_int(heap, s, 0 - 10, 10);
+    let (s2, sort) = schema.new_string(heap, s1, 0, schema.int_max());
+    let s3 = schema.add_choice(heap, s2, sort, "asc");
+    let s4 = schema.add_choice(heap, s3, sort, "desc");
+    let (s5, tag) = schema.new_string(heap, s4, 1, 8);
+    let (s6, num) = schema.new_int(heap, s5, 0, 9);
+    var api = web.empty(heap);
+    let (a1, n) = web.operation(heap, api, "GET", "/n", "n");
+    api = web.query_param(heap, a1, n, "delta", delta, false);
+    api = web.query_param(heap, api, n, "low", delta, false);
+    api = web.query_param(heap, api, n, "sort", sort, false);
+    api = web.query_param(heap, api, n, "tag", tag, false);
+    api = web.query_param(heap, api, n, "bad", tag, false);
+    api = web.query_param(heap, api, n, "num", num, false);
+    api = web.query_param(heap, api, n, "must", tag, true);
+    borrow s6 as &sr in {
+        api = web.default_int(heap, api, sr, n, "delta", 0 - 3);
+        api = web.default_int(heap, api, sr, n, "low", 0 - 11);
+        api = web.default_text(heap, api, sr, n, "sort", "asc");
+        api = web.default_text(heap, api, sr, n, "tag", "a\"b");
+        api = web.default_text(heap, api, sr, n, "bad", "");
+        api = web.default_text(heap, api, sr, n, "bad", "123456789");
+        api = web.default_text(heap, api, sr, n, "num", "5");
+        api = web.default_text(heap, api, sr, n, "must", "x");
+    }
+    return (api, s6);
+}
+
+fn test_negative_and_text_defaults[&h](heap: &!h Heap) -> [heap] int {
+    let (api, s) = defaults_more_api(heap);
+    borrow api as &ar in {
+        borrow s as &sr in {
+            test.assert(web.has_default(ar, 1, "delta"));
+            test.assert_eq(web.default_of(ar, 1, "delta"), 0 - 3);
+            test.assert(!web.has_default(ar, 1, "low"));
+            test.assert(web.has_default(ar, 1, "sort"));
+            test.assert(bytes.equal(web.default_text_of(ar, 1, "sort"), "asc"));
+            test.assert(bytes.equal(web.default_text_of(ar, 1, "tag"), "a\"b"));
+            test.assert_eq(web.default_of(ar, 1, "sort"), 0);
+            // Refused: a choice outside the node, an empty text and a text too long for 1..8, a text on an integer node.
+            test.assert(!web.has_default(ar, 1, "bad"));
+            test.assert(!web.has_default(ar, 1, "num"));
+            test.assert(!web.has_default(ar, 1, "must"));
+            test.assert_eq(len(web.default_text_of(ar, 1, "bad")), 0);
+            test.assert_eq(len(web.default_text_of(ar, 1, "nope")), 0);
+            // A negative default is in the integer slot; a text default leaves its slot absent, which is what `present` is for.
+            is(heap, ar, sr, "GET /n?must=a HTTP/1.0\r\n\r\n", 6, "1|-3,0|0,0|-1,-1|-1,-1|-1,-1|0,0");
+            is(heap, ar, sr, "GET /n?must=a&delta=4&sort=desc HTTP/1.0\r\n\r\n", 3, "1|4,1|0,0|27,31");
+            // The document: a negative integer and a text, escaped.
+            let doc = web.openapi(heap, ar, sr, "T", "1");
+            borrow doc as &db in {
+                let text = buffer.bytes(db);
+                test.assert(index_of(text, "{\"name\":\"delta\",\"in\":\"query\",\"required\":false,\"schema\":{\"type\":\"integer\",\"minimum\":-10,\"maximum\":10,\"default\":-3}}") > 0);
+                test.assert(index_of(text, "\"default\":\"asc\"}") > 0);
+                test.assert(index_of(text, "\"default\":\"a\\\"b\"}") > 0);
+                test.assert(index_of(text, "\"name\":\"low\",\"in\":\"query\",\"required\":false,\"schema\":{\"type\":\"integer\",\"minimum\":-10,\"maximum\":10}}") > 0);
+            }
+            buffer.drop(heap, doc);
+        }
+    }
+    web.drop(heap, api);
+    schema.drop(heap, s);
     return 0;
 }

@@ -246,8 +246,8 @@ limit = web.int_arg(args, limit_slot);   // a valid int, 1..100: dispatch judged
 
 A default is declared with the parameter: `web.default_int(heap, api, schema, op_list, "limit", 20)` (or `web.default_bool`). A request that
 does not send it has the default in its slot (`web.present` is still false: the client did not send it), and the document writes
-`"default": 20` into the parameter's schema. A non-negative integer or a flag only; a misuse is ignored and `web.default_of` reads
-back what took (§12).
+`"default": 20` into the parameter's schema. An integer (negative if the node allows it), a flag (`web.default_bool`) or a text (`web.default_text`; a text cannot be in the slot, so
+the handler reads it with `web.default_text_of` when `web.present` is false). A misuse is ignored and `web.has_default` says whether it took (§12).
 
 A parameter that breaks its node is a `422` that lists every error, with where it is (`/query/limit`, `/path/id`,
 `/header/Idempotency-Key`) and a code a client can switch on (`type`, `range`, `minimum`, `maximum`, `min_length`,
@@ -406,8 +406,7 @@ scripts/figures.py        draws docs/figures/bench.svg from the table in this fi
 
 Not yet built:
 
-Anything like FastAPI's dependency injection; middleware beyond `guard` and `log_line` (a request id, CORS, rate limiting); OAuth, sessions, expiry and revocation; text and negative defaults (§12.2);
-`$ref`/`$defs` in the generated JSON Schema. (`dispatch` is in all
+Anything like FastAPI's dependency injection; middleware beyond `guard` and `log_line` (a request id, CORS, rate limiting); OAuth, sessions, expiry and revocation; `$ref`/`$defs` in the generated JSON Schema. (`dispatch` is in all
 three services now: `users`, `users_pg` and `users_threads`; the last two were converted after the first, so a bad parameter is
 the same answer in each.) The design document says which of these are decided and which are open.
 
