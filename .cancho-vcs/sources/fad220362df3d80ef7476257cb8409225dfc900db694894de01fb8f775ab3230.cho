@@ -44,21 +44,22 @@ pub res struct Api {
     recs: vec.Vec[int],
     text: buffer.Buffer,
     ops: int,
-    // Two ints for each operation, in id order: where its record is in `recs`, and where its first parameter's is (-1 if
+    // Two ints for each operation, in id order after a first pair that is not an operation (its second int is where the document's default security
+    // begins, a chain through field 7 of those records, or -1): where its record is in `recs`, and where its first parameter's is (-1 if
     // it has none; the parameters of one operation are a chain through field 7 of their records). So that `dispatch`
     // reads the parameters of one operation and not the whole declaration.
     index: vec.Vec[int],
 }
 
 // Record layout, `rec_width()` ints each:
-//   operation: 1, path_off, path_len, method, id_off, id_len, documented, 0
+//   operation: 1, path_off, path_len, method, id_off, id_len, documented, the first of its security records (a chain through field 7 of them), or -1
 //   parameter: 2, op, where (0 path, 1 query, 2 header), name_off, name_len, node, required, the next parameter of the op (a record index, or -1)
 //   response:  3, op, status, text_off, text_len, node (-1 none, -2 problem), header_off, header_len
 //   component: 4, name_off, name_len, node, 0, 0, 0, 0
 //   body:      5, op, node, optional (1: the body may be left out), 0, 0, 0, 0
 //   scheme:    6, name_off, name_len, kind (0 http bearer), desc_off, desc_len, 0, 0
-//   security:  7, op, name_off, name_len (0: the operation is open), 0, 0, 0, 0
-//   default:   8, name_off, name_len, 0, 0, 0, 0, 0
+//   security:  7, op, name_off, name_len (0: the operation is open), 0, 0, 0, the next security record of the op, or -1
+//   default:   8, name_off, name_len, 0, 0, 0, 0, the next default record, or -1
 //   words:     9, op, kind (0 summary, 1 description), text_off, text_len, 0, 0, 0
 //   note:      10, op, name_off, name_len, text_off, text_len, 0, 0      (a parameter's description)
 //   about:     11, kind (0 summary, 1 description), text_off, text_len, 0, 0, 0, 0
@@ -112,7 +113,7 @@ fn tag_about() -> [] int {
 }
 
 pub fn empty[&h](heap: &!h Heap) -> [heap] Api {
-    return Api { router: route.empty(heap), recs: vec.empty(heap, 64, 0), text: buffer.empty(heap, 512), ops: 0, index: vec.empty(heap, 16, 0) };
+    return Api { router: route.empty(heap), recs: vec.empty(heap, 64, 0), text: buffer.empty(heap, 512), ops: 0, index: vec.push(heap, vec.push(heap, vec.empty(heap, 16, 0), 0 - 1), 0 - 1) };
 }
 
 // End the API, answering how many operations it declared.
@@ -203,7 +204,7 @@ fn declare[&h, &m, &p, &o](heap: &!h Heap, a: Api, method: &m [byte], pattern: &
     borrow recs as &rr in {
         at = vec.size(rr);
     }
-    let rc = put_rec(heap, recs, tag_op(), path_at, len(pattern), code, name_at, len(operation_id), documented, 0);
+    let rc = put_rec(heap, recs, tag_op(), path_at, len(pattern), code, name_at, len(operation_id), documented, 0 - 1);
     let ix = vec.push(heap, vec.push(heap, index, at), 0 - 1);
     return (Api { router: r, recs: rc, text: t2, ops: id, index: ix }, id);
 }
@@ -262,11 +263,11 @@ fn param[&h, &n](heap: &!h Heap, a: Api, op: int, place: int, name: &n [byte], n
     if op >= 1 && op <= ops {
         var first = 0 - 1;
         borrow ix as &ir in {
-            first = vec.get(ir, 2 * (op - 1) + 1);
+            first = vec.get(ir, 2 * op + 1);
         }
         if first < 0 {
             borrow mut ix as &!iw in {
-                vec.set(iw, 2 * (op - 1) + 1, here);
+                vec.set(iw, 2 * op + 1, here);
             }
         } else {
             var tail = first;
@@ -335,7 +336,7 @@ fn find_param[&a, &n](api: &a Api, op: int, name: &n [byte]) -> [] int {
     if op < 1 || op > api.ops {
         return 0 - 1;
     }
-    var at = vec.get(api.index, 2 * (op - 1) + 1);
+    var at = vec.get(api.index, 2 * op + 1);
     while at >= 0 {
         if rec(api, at, 2) >= 1 && bytes.equal(text_of(api, rec(api, at, 3), rec(api, at, 4)), name) {
             return at;
@@ -609,61 +610,143 @@ pub fn bearer_scheme[&h, &n, &d](heap: &!h Heap, a: Api, name: &n [byte], descri
 pub fn require[&h, &n](heap: &!h Heap, a: Api, op: int, scheme: &n [byte]) -> [heap] Api {
     let Api { router, recs, text, ops, index } = a;
     let (t, at) = text_add(heap, text, scheme);
-    let rc = put_rec(heap, recs, tag_sec(), op, at, len(scheme), 0, 0, 0, 0);
-    return Api { router: router, recs: rc, text: t, ops: ops, index: index };
+    var here = 0;
+    borrow recs as &rr in {
+        here = vec.size(rr);
+    }
+    let rc = put_rec(heap, recs, tag_sec(), op, at, len(scheme), 0, 0, 0, 0 - 1);
+    var rd = rc;
+    borrow index as &ir in {
+        rd = link_sec(rd, ir, ops, op, here);
+    }
+    return Api { router: router, recs: rd, text: t, ops: ops, index: index };
 }
 
 // `op` needs no credentials (`security: []`), whatever the document's default says.
 pub fn no_auth[&h](heap: &!h Heap, a: Api, op: int) -> [heap] Api {
     let Api { router, recs, text, ops, index } = a;
-    let rc = put_rec(heap, recs, tag_sec(), op, 0, 0, 0, 0, 0, 0);
-    return Api { router: router, recs: rc, text: text, ops: ops, index: index };
+    var here = 0;
+    borrow recs as &rr in {
+        here = vec.size(rr);
+    }
+    let rc = put_rec(heap, recs, tag_sec(), op, 0, 0, 0, 0, 0, 0 - 1);
+    var rd = rc;
+    borrow index as &ir in {
+        rd = link_sec(rd, ir, ops, op, here);
+    }
+    return Api { router: router, recs: rd, text: text, ops: ops, index: index };
 }
 
 // The document's default security: each call is an alternative, as `require`.
 pub fn default_require[&h, &n](heap: &!h Heap, a: Api, scheme: &n [byte]) -> [heap] Api {
     let Api { router, recs, text, ops, index } = a;
     let (t, at) = text_add(heap, text, scheme);
-    let rc = put_rec(heap, recs, tag_default(), at, len(scheme), 0, 0, 0, 0, 0);
-    return Api { router: router, recs: rc, text: t, ops: ops, index: index };
+    var here = 0;
+    borrow recs as &rr in {
+        here = vec.size(rr);
+    }
+    let rc = put_rec(heap, recs, tag_default(), at, len(scheme), 0, 0, 0, 0, 0 - 1);
+    var ix = index;
+    var rd = rc;
+    var head = 0 - 1;
+    borrow ix as &ir in {
+        head = vec.get(ir, 1);
+    }
+    if head < 0 {
+        borrow mut ix as &!iw in {
+            vec.set(iw, 1, here);
+        }
+    } else {
+        rd = chain_end(rd, head, here);
+    }
+    return Api { router: router, recs: rd, text: t, ops: ops, index: ix };
+}
+
+// Put the record at `here` after the last of the chain that begins at record `first` (a chain through field 7).
+fn chain_end(recs: vec.Vec[int], first: int, here: int) -> [] vec.Vec[int] {
+    var rd = recs;
+    var tail = first;
+    var more = true;
+    while more {
+        var next = 0 - 1;
+        borrow rd as &rr in {
+            next = vec.get(rr, tail + 7);
+        }
+        if next < 0 {
+            more = false;
+        } else {
+            tail = next;
+        }
+    }
+    borrow mut rd as &!rw in {
+        vec.set(rw, tail + 7, here);
+    }
+    return rd;
+}
+
+// Link the security record at `here` into the chain of operation `op` (its operation record's field 7 is the chain's head).
+fn link_sec[&i](recs: vec.Vec[int], index: &i vec.Vec[int], ops: int, op: int, here: int) -> [] vec.Vec[int] {
+    if op < 1 || op > ops {
+        return recs;
+    }
+    var rd = recs;
+    let op_rec = vec.get(index, 2 * op);
+    var head = 0 - 1;
+    borrow rd as &rr in {
+        head = vec.get(rr, op_rec + 7);
+    }
+    if head < 0 {
+        borrow mut rd as &!rw in {
+            vec.set(rw, op_rec + 7, here);
+        }
+        return rd;
+    }
+    return chain_end(rd, head, here);
 }
 
 // ---------------------------------------------------------------------
 // Asking who may call (read back from the declaration)
 // ---------------------------------------------------------------------
 
+// The first security record of `op` (a chain through field 7), or -1.
+fn sec_head[&a](api: &a Api, op: int) -> [] int {
+    let at = op_at(api, op);
+    if at < 0 {
+        return 0 - 1;
+    }
+    return rec(api, at, 7);
+}
+
 // Whether `op` was declared open (`no_auth`), whatever the document's default says.
 pub fn is_open[&a](api: &a Api, op: int) -> [] bool {
-    var i = 0;
-    while i < vec.size(api.recs) {
-        if rec(api, i, 0) == tag_sec() && rec(api, i, 1) == op && rec(api, i, 3) == 0 {
+    var i = sec_head(api, op);
+    while i >= 0 {
+        if rec(api, i, 3) == 0 {
             return true;
         }
-        i = i + rec_width();
+        i = rec(api, i, 7);
     }
     return false;
 }
 
 fn own_alternatives[&a](api: &a Api, op: int) -> [] int {
     var n = 0;
-    var i = 0;
-    while i < vec.size(api.recs) {
-        if rec(api, i, 0) == tag_sec() && rec(api, i, 1) == op && rec(api, i, 3) > 0 {
+    var i = sec_head(api, op);
+    while i >= 0 {
+        if rec(api, i, 3) > 0 {
             n = n + 1;
         }
-        i = i + rec_width();
+        i = rec(api, i, 7);
     }
     return n;
 }
 
 fn default_alternatives[&a](api: &a Api) -> [] int {
     var n = 0;
-    var i = 0;
-    while i < vec.size(api.recs) {
-        if rec(api, i, 0) == tag_default() {
-            n = n + 1;
-        }
-        i = i + rec_width();
+    var i = vec.get(api.index, 1);
+    while i >= 0 {
+        n = n + 1;
+        i = rec(api, i, 7);
     }
     return n;
 }
@@ -687,33 +770,29 @@ pub fn requirements[&a](api: &a Api, op: int) -> [] int {
 // the alternatives. The text is the scheme's name as `bearer_scheme` was given it (`"admin"`).
 pub fn requirement[&a](api: &a Api, op: int, i: int) -> [] &a [byte] {
     var seen = 0;
-    var j = 0;
-    if op < 1 || op > api.ops || i < 0 {
+    if op < 1 || op > api.ops || i < 0 || is_open(api, op) {
         return text_of(api, 0, 0);
     }
-    if own_alternatives(api, op) > 0 && !is_open(api, op) {
-        while j < vec.size(api.recs) {
-            if rec(api, j, 0) == tag_sec() && rec(api, j, 1) == op && rec(api, j, 3) > 0 {
+    var j = sec_head(api, op);
+    if own_alternatives(api, op) > 0 {
+        while j >= 0 {
+            if rec(api, j, 3) > 0 {
                 if seen == i {
                     return text_of(api, rec(api, j, 2), rec(api, j, 3));
                 }
                 seen = seen + 1;
             }
-            j = j + rec_width();
+            j = rec(api, j, 7);
         }
         return text_of(api, 0, 0);
     }
-    if is_open(api, op) {
-        return text_of(api, 0, 0);
-    }
-    while j < vec.size(api.recs) {
-        if rec(api, j, 0) == tag_default() {
-            if seen == i {
-                return text_of(api, rec(api, j, 1), rec(api, j, 2));
-            }
-            seen = seen + 1;
+    j = vec.get(api.index, 1);
+    while j >= 0 {
+        if seen == i {
+            return text_of(api, rec(api, j, 1), rec(api, j, 2));
         }
-        j = j + rec_width();
+        seen = seen + 1;
+        j = rec(api, j, 7);
     }
     return text_of(api, 0, 0);
 }
@@ -776,7 +855,7 @@ pub fn slot[&a, &n](api: &a Api, op: int, name: &n [byte]) -> [] int {
         return 0 - 1;
     }
     var k = 0;
-    var p = vec.get(api.index, 2 * (op - 1) + 1);
+    var p = vec.get(api.index, 2 * op + 1);
     while p >= 0 {
         if bytes.equal(text_of(api, rec(api, p, 3), rec(api, p, 4)), name) {
             return k;
@@ -793,7 +872,7 @@ pub fn most_args[&a](api: &a Api) -> [] int {
     var op = 1;
     while op <= api.ops {
         var n = 0;
-        var p = vec.get(api.index, 2 * (op - 1) + 1);
+        var p = vec.get(api.index, 2 * op + 1);
         while p >= 0 {
             n = n + 1;
             p = rec(api, p, 7);
@@ -1058,8 +1137,8 @@ fn next_unknown[&a, &q](api: &a Api, first: int, query: &q [byte], start: int) -
 // 0, and nothing here allocates.
 fn judge[&a, &s, &q, &t, &p, &g, &x](api: &a Api, sc: &s schema.Schema, id: int, request: &q [byte], table: &t [int], params: &p [int], args: &!g [int], scratch: &!x [byte]) -> [] int {
     let query = http.query(request, table);
-    let operation = vec.get(api.index, 2 * (id - 1));
-    let first = vec.get(api.index, 2 * (id - 1) + 1);
+    let operation = vec.get(api.index, 2 * id);
+    let first = vec.get(api.index, 2 * id + 1);
     var errors = 0;
     var queried = false;
     var k = 0;
@@ -1093,8 +1172,8 @@ fn judge[&a, &s, &q, &t, &p, &g, &x](api: &a Api, sc: &s schema.Schema, id: int,
 fn explain[&h, &a, &s, &q, &t, &p, &g, &x](heap: &!h Heap, api: &a Api, sc: &s schema.Schema, id: int, request: &q [byte], table: &t [int], params: &p [int], args: &!g [int], scratch: &!x [byte]) -> [heap] (buffer.Buffer, int) {
     var b = buffer.empty(heap, 256);
     let query = http.query(request, table);
-    let operation = vec.get(api.index, 2 * (id - 1));
-    let first = vec.get(api.index, 2 * (id - 1) + 1);
+    let operation = vec.get(api.index, 2 * id);
+    let first = vec.get(api.index, 2 * id + 1);
     var errors = 0;
     var queried = false;
     var k = 0;
@@ -1230,7 +1309,7 @@ fn op_at[&a](api: &a Api, op: int) -> [] int {
     if op < 1 || op > api.ops {
         return 0 - 1;
     }
-    return vec.get(api.index, 2 * (op - 1));
+    return vec.get(api.index, 2 * op);
 }
 
 // Whether operations at records `i` and `j` have the same path.
@@ -1499,29 +1578,16 @@ fn put_operation[&h, &a, &s](heap: &!h Heap, w: json.Writer, api: &a Api, sc: &s
         i = i + rec_width();
     }
 
-    var open = false;
-    var alternatives = 0;
-    i = 0;
-    while i < vec.size(api.recs) {
-        if rec(api, i, 0) == tag_sec() && rec(api, i, 1) == op {
-            if rec(api, i, 3) == 0 {
-                open = true;
-            } else {
-                alternatives = alternatives + 1;
-            }
-        }
-        i = i + rec_width();
-    }
+    let open = is_open(api, op);
+    let alternatives = own_alternatives(api, op);
     if open || alternatives > 0 {
         o = json.put_key(heap, o, "security");
         o = json.begin_array(heap, o);
         if !open {
-            i = 0;
-            while i < vec.size(api.recs) {
-                if rec(api, i, 0) == tag_sec() && rec(api, i, 1) == op {
-                    o = put_requirement(heap, o, api, rec(api, i, 2), rec(api, i, 3));
-                }
-                i = i + rec_width();
+            var sj = sec_head(api, op);
+            while sj >= 0 {
+                o = put_requirement(heap, o, api, rec(api, sj, 2), rec(api, sj, 3));
+                sj = rec(api, sj, 7);
             }
         }
         o = json.end_array(heap, o);
@@ -1698,12 +1764,10 @@ pub fn openapi[&h, &a, &s, &t, &v](heap: &!h Heap, api: &a Api, sc: &s schema.Sc
     if has_tag(api, tag_default()) {
         w = json.put_key(heap, w, "security");
         w = json.begin_array(heap, w);
-        var d = 0;
-        while d < vec.size(api.recs) {
-            if rec(api, d, 0) == tag_default() {
-                w = put_requirement(heap, w, api, rec(api, d, 1), rec(api, d, 2));
-            }
-            d = d + rec_width();
+        var d = vec.get(api.index, 1);
+        while d >= 0 {
+            w = put_requirement(heap, w, api, rec(api, d, 1), rec(api, d, 2));
+            d = rec(api, d, 7);
         }
         w = json.end_array(heap, w);
     }
