@@ -330,6 +330,88 @@ pub fn describe[&h, &d](heap: &!h Heap, a: Api, op: int, what: &d [byte]) -> [he
     return words(heap, a, op, 1, what);
 }
 
+// The record of the optional query or header parameter `name` of `op`, or -1.
+fn find_param[&a, &n](api: &a Api, op: int, name: &n [byte]) -> [] int {
+    if op < 1 || op > api.ops {
+        return 0 - 1;
+    }
+    var at = vec.get(api.index, 2 * (op - 1) + 1);
+    while at >= 0 {
+        if rec(api, at, 2) >= 1 && bytes.equal(text_of(api, rec(api, at, 3), rec(api, at, 4)), name) {
+            return at;
+        }
+        at = rec(api, at, 7);
+    }
+    return 0 - 1;
+}
+
+// A default is kept in the parameter record's `required` field: 0 optional, 1 required, 2 + v a default of v (v >= 0: an integer
+// or a flag). The field is read as `== 1` for "required" everywhere, so a default is never required.
+fn set_default[&h, &s, &n](heap: &!h Heap, a: Api, sc: &s schema.Schema, op: int, name: &n [byte], value: int, flag: bool) -> [heap] Api {
+    var at = 0 - 1;
+    var current = 0;
+    var node = 0;
+    borrow a as &ar in {
+        at = find_param(ar, op, name);
+        if at >= 0 {
+            current = rec(ar, at, 6);
+            node = rec(ar, at, 5);
+        }
+    }
+    if at < 0 || value < 0 || current == 1 {
+        return a;
+    }
+    if flag {
+        if !schema.is_bool(sc, node) || value > 1 {
+            return a;
+        }
+    } else {
+        if !schema.is_int(sc, node) {
+            return a;
+        }
+        let digits = buffer.push_nat(heap, buffer.empty(heap, 24), value);
+        var bad = 1;
+        borrow digits as &db in {
+            bad = schema.check_text(sc, node, buffer.bytes(db));
+        }
+        buffer.drop(heap, digits);
+        if bad != 0 {
+            return a;
+        }
+    }
+    let Api { router, recs, text, ops, index } = a;
+    var rd = recs;
+    borrow mut rd as &!rw in {
+        vec.set(rw, at + 6, 2 + value);
+    }
+    return Api { router: router, recs: rd, text: text, ops: ops, index: index };
+}
+
+// The optional integer query or header parameter `name` of `op` is `value` when the request does not send it: `dispatch` puts it in the
+// slot (`int_arg` reads it; `present` still says the client did not send it), and the document writes it as the schema's `default`. It
+// is declared once, here, and the handler no longer says it. Ignored (read it back with `default_of`) if there is no such parameter, it is
+// required, it is not an integer node, or `value` is negative or breaks the node's range.
+pub fn default_int[&h, &s, &n](heap: &!h Heap, a: Api, sc: &s schema.Schema, op: int, name: &n [byte], value: int) -> [heap] Api {
+    return set_default(heap, a, sc, op, name, value, false);
+}
+
+// The same for a boolean parameter.
+pub fn default_bool[&h, &s, &n](heap: &!h Heap, a: Api, sc: &s schema.Schema, op: int, name: &n [byte], value: bool) -> [heap] Api {
+    if value {
+        return set_default(heap, a, sc, op, name, 1, true);
+    }
+    return set_default(heap, a, sc, op, name, 0, true);
+}
+
+// The default declared for the parameter `name` of `op` (0 or 1 for a flag), or -1 if there is none.
+pub fn default_of[&a, &n](api: &a Api, op: int, name: &n [byte]) -> [] int {
+    let at = find_param(api, op, name);
+    if at < 0 || rec(api, at, 6) < 2 {
+        return 0 - 1;
+    }
+    return rec(api, at, 6) - 2;
+}
+
 // A description of the parameter called `name` (path, query or header, whichever `op` declared), written as its `description`.
 pub fn describe_param[&h, &n, &d](heap: &!h Heap, a: Api, op: int, name: &n [byte], what: &d [byte]) -> [heap] Api {
     let Api { router, recs, text, ops, index } = a;
@@ -827,6 +909,11 @@ fn check_param[&a, &s, &q, &t, &p, &g, &x](api: &a Api, sc: &s schema.Schema, i:
         if rec(api, i, 6) == 1 {
             code = schema.err_required();
         }
+        // Declared once (`default_int`): the slot holds it, and `present` stays false.
+        if rec(api, i, 6) >= 2 {
+            va = rec(api, i, 6) - 2;
+            vb = 0;
+        }
     } else if twice {
         code = err_duplicate();
     } else if place == 2 {
@@ -1100,6 +1187,19 @@ fn has_component[&a, &n](api: &a Api, name: &n [byte]) -> [] bool {
 // `"schema": ...` for `node`: a `$ref` if it is a component, else the generated JSON
 // Schema inline.
 fn put_schema[&h, &a, &s](heap: &!h Heap, w: json.Writer, api: &a Api, sc: &s schema.Schema, node: int) -> [heap] json.Writer {
+    return put_schema_with(heap, w, api, sc, node, 0 - 1);
+}
+
+// `dflt` >= 0 adds `"default"`: an integer, or a boolean for a boolean node.
+fn put_default[&h, &s](heap: &!h Heap, w: json.Writer, sc: &s schema.Schema, node: int, dflt: int) -> [heap] json.Writer {
+    var o = json.put_key(heap, w, "default");
+    if schema.is_bool(sc, node) {
+        return json.put_bool(heap, o, dflt == 1);
+    }
+    return json.put_int(heap, o, dflt);
+}
+
+fn put_schema_with[&h, &a, &s](heap: &!h Heap, w: json.Writer, api: &a Api, sc: &s schema.Schema, node: int, dflt: int) -> [heap] json.Writer {
     var o = json.put_key(heap, w, "schema");
     let c = comp_of(api, node);
     if c >= 0 {
@@ -1111,13 +1211,40 @@ fn put_schema[&h, &a, &s](heap: &!h Heap, w: json.Writer, api: &a Api, sc: &s sc
             o = json.put_string(heap, o, buffer.bytes(tb));
         }
         buffer.drop(heap, target);
+        if dflt >= 0 {
+            o = put_default(heap, o, sc, node, dflt);
+        }
         return json.end_object(heap, o);
     }
     let fragment = schema.json_schema(heap, sc, node);
+    if dflt < 0 {
+        borrow fragment as &fb in {
+            o = json.put_fragment(heap, o, buffer.bytes(fb));
+        }
+        buffer.drop(heap, fragment);
+        return o;
+    }
+    // The fragment is one object, `{...}`; the default goes before its closing brace.
+    var joined = buffer.empty(heap, 64);
     borrow fragment as &fb in {
-        o = json.put_fragment(heap, o, buffer.bytes(fb));
+        joined = buffer.append(heap, joined, buffer.bytes(fb)[0..len(buffer.bytes(fb)) - 1]);
     }
     buffer.drop(heap, fragment);
+    joined = buffer.append(heap, joined, ",\"default\":");
+    if schema.is_bool(sc, node) {
+        if dflt == 1 {
+            joined = buffer.append(heap, joined, "true");
+        } else {
+            joined = buffer.append(heap, joined, "false");
+        }
+    } else {
+        joined = buffer.push_nat(heap, joined, dflt);
+    }
+    joined = buffer.append(heap, joined, "}");
+    borrow joined as &jb in {
+        o = json.put_fragment(heap, o, buffer.bytes(jb));
+    }
+    buffer.drop(heap, joined);
     return o;
 }
 
@@ -1197,7 +1324,11 @@ fn put_param[&h, &a, &s](heap: &!h Heap, w: json.Writer, api: &a Api, sc: &s sch
         o = json.put_key(heap, o, "description");
         o = json.put_string(heap, o, text_of(api, rec(api, n, 4), rec(api, n, 5)));
     }
-    o = put_schema(heap, o, api, sc, rec(api, i, 5));
+    var dflt = 0 - 1;
+    if rec(api, i, 6) >= 2 {
+        dflt = rec(api, i, 6) - 2;
+    }
+    o = put_schema_with(heap, o, api, sc, rec(api, i, 5), dflt);
     return json.end_object(heap, o);
 }
 

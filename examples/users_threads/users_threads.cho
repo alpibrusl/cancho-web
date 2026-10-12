@@ -55,10 +55,6 @@ fn arena_bytes() -> [] int {
     return 67108864;
 }
 
-fn default_limit() -> [] int {
-    return 20;
-}
-
 fn max_limit() -> [] int {
     return 100;
 }
@@ -256,6 +252,10 @@ fn setup[&h](heap: &!h Heap) -> [heap] (schema.Schema, int, web.Api, buffer.Buff
     let (a2, op_list) = web.operation(heap, api, "GET", "/users", "listUsers");
     api = web.query_param(heap, a2, op_list, "limit", limit, false);
     api = web.query_param(heap, api, op_list, "offset", offset, false);
+    // Declared once: a request without `limit` has 20 in its slot, and the document says so.
+    borrow s as &dsr in {
+        api = web.default_int(heap, api, dsr, op_list, "limit", 20);
+    }
     api = web.respond(heap, api, op_list, 200, "a page", page);
     api = web.respond_problem(heap, api, op_list, 422);
 
@@ -531,13 +531,8 @@ fn handle[&h, &r, &sc, &d, &q, &t, &p, &g, &x, &b](heap: &!h Heap, api: &r web.A
     if id == 1 {
         answer = server.reply(heap, answer, 200, "{\"ok\":true}", keep);
     } else if id == 2 {
-        var limit = default_limit();
-        let limit_slot = web.slot(api, 2, "limit");
-        if web.present(args, limit_slot) {
-            limit = web.int_arg(args, limit_slot);
-        }
         borrow st as &str in {
-            answer = list(heap, str, limit, web.int_arg(args, web.slot(api, 2, "offset")), answer, keep);
+            answer = list(heap, str, web.int_arg(args, web.slot(api, 2, "limit")), web.int_arg(args, web.slot(api, 2, "offset")), answer, keep);
         }
     } else if id == 4 {
         borrow mut st as &!stw in {

@@ -33,10 +33,6 @@ import pg;
 import pg.pool;
 import queries;
 
-fn default_limit() -> [] int {
-    return 20;
-}
-
 fn max_limit() -> [] int {
     return 100;
 }
@@ -168,6 +164,10 @@ fn setup[&h](heap: &!h Heap) -> [heap] (schema.Schema, int, web.Api, buffer.Buff
     let (a2, op_list) = web.operation(heap, api, "GET", "/users", "listUsers");
     api = web.query_param(heap, a2, op_list, "limit", limit, false);
     api = web.query_param(heap, api, op_list, "offset", offset, false);
+    // Declared once: a request without `limit` has 20 in its slot, and the document says so.
+    borrow s as &dsr in {
+        api = web.default_int(heap, api, dsr, op_list, "limit", 20);
+    }
     api = web.respond(heap, api, op_list, 200, "a page", page);
     api = web.respond_problem(heap, api, op_list, 422);
 
@@ -537,11 +537,7 @@ fn create_conclude[&h, &m](heap: &!h Heap, rep: &m [byte], status: int, out: buf
 // `limit` and `offset` arrive valid: `web.dispatch` judged them with the nodes that document them.
 // The first query is how many users there are.
 fn list_begin[&h, &g, &w](heap: &!h Heap, args: &g [int], limit_slot: int, offset_slot: int, out: buffer.Buffer, rec: &!w [int]) -> [heap] (buffer.Buffer, buffer.Buffer, int) {
-    var limit = default_limit();
-    if web.present(args, limit_slot) {
-        limit = web.int_arg(args, limit_slot);
-    }
-    rec[rec_limit()] = limit;
+    rec[rec_limit()] = web.int_arg(args, limit_slot);
     rec[rec_offset()] = web.int_arg(args, offset_slot);
     rec[rec_phase()] = 0;
     return (out, queries.count_users_start(heap), 1);
