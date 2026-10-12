@@ -3,7 +3,9 @@ edition 5;
 // `guarded` -- who may call, declared once and enforced: the example for `web.guard` and `web.log_line`
 // (`docs/design.md` section 11).
 //
-//     guarded <port> <admin-token> <ingest-token>
+//     guarded <port> <admin-token> <ingest-token> [<n>]
+//
+// `n` declares `n` more operations after these, each needing `admin`, for measuring a larger API (`benches/guard_scale.sh`).
 //
 //     GET  /health          open (`no_auth`)
 //     GET  /report          the `admin` scheme
@@ -49,7 +51,7 @@ fn number_of[&t](text: &t [byte]) -> [] int {
     return n;
 }
 
-fn setup[&h](heap: &!h Heap) -> [heap] (schema.Schema, web.Api, buffer.Buffer) {
+fn setup[&h](heap: &!h Heap, fillers: int) -> [heap] (schema.Schema, web.Api, buffer.Buffer) {
     var s = schema.empty(heap);
     let (s1, alive) = schema.new_bool(heap, s);
     let (s2, health) = schema.new_object(heap, s1, true);
@@ -83,6 +85,20 @@ fn setup[&h](heap: &!h Heap) -> [heap] (schema.Schema, web.Api, buffer.Buffer) {
 
     let (a4, op_doc) = web.internal(heap, api, "GET", "/openapi.json");
     api = a4;
+
+    // `guarded <port> <admin> <ingest> <n>` declares `n` more operations (`GET /filler/<i>`, each needing `admin`), which nothing answers:
+    // a larger API, to see what `guard` costs when the declaration is larger (`docs/design.md` section 11.6).
+    var filler = 0;
+    while filler < fillers {
+        var pattern = buffer.append(heap, buffer.empty(heap, 32), "/filler/");
+        pattern = buffer.push_nat(heap, pattern, filler);
+        borrow pattern as &pb in {
+            let (af, opf) = web.operation(heap, api, "GET", buffer.bytes(pb), buffer.bytes(pb));
+            api = web.require(heap, af, opf, "admin");
+        }
+        buffer.drop(heap, pattern);
+        filler = filler + 1;
+    }
 
     let (s6, text2) = schema.new_string(heap, s, 0, schema.int_max());
     let (s7, status) = schema.new_int(heap, s6, 100, 599);
@@ -129,11 +145,11 @@ fn handle[&h, &r, &sc, &k, &d, &q, &t, &p, &g, &x](heap: &!h Heap, api: &r web.A
     return server.reply(heap, gated, 404, "{\"title\":\"Not Found\"}", keep);
 }
 
-fn run[&h, &k, &l, &i, &a, &b](heap: &!h Heap, clock: &k Clock, listener: &!l Listener, con: &!i Io, port: int, admin: &a [byte], ingest: &b [byte]) -> [heap, conn_accept, conn_read, conn_write, poll, clock, err_write] int {
+fn run[&h, &k, &l, &i, &a, &b](heap: &!h Heap, clock: &k Clock, listener: &!l Listener, con: &!i Io, port: int, fillers: int, admin: &a [byte], ingest: &b [byte]) -> [heap, conn_accept, conn_read, conn_write, poll, clock, err_write] int {
     match poller_new() {
         Polling::Ok(p) => {
             var srv = server.open(heap, p, listener, 16384, 0, 9);
-            let (sc, api, doc) = setup(heap);
+            let (sc, api, doc) = setup(heap, fillers);
             // Fail closed: refuse to run while the document says nothing about who may call some operation (`guard` would let it through).
             var undecided = 0;
             borrow api as &ar in {
@@ -239,7 +255,14 @@ fn main(world: World) -> [] int {
     release(fs);
     release(ffi);
     var status = 2;
+    var fillers = 0;
     borrow args as &g in {
+        if arg_count(g) > 4 {
+            fillers = number_of(arg(g, 4));
+            if fillers > 10000 {
+                fillers = 10000;
+            }
+        }
         if arg_count(g) > 3 && len(arg(g, 2)) > 0 && len(arg(g, 3)) > 0 {
             let port = number_of(arg(g, 1));
             if port > 0 && port < 65536 {
@@ -253,7 +276,7 @@ fn main(world: World) -> [] int {
                                 borrow mut heap as &!h in {
                                     borrow mut io as &!i in {
                                         borrow clock as &c in {
-                                            status = run(h, c, lh, i, port, arg(g, 2), arg(g, 3));
+                                            status = run(h, c, lh, i, port, fillers, arg(g, 2), arg(g, 3));
                                         }
                                     }
                                 }

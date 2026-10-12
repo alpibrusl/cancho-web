@@ -539,8 +539,9 @@ by accident.
 
 ### 11.6 What it costs
 
-`guard` reads the declaration's security records: a pass over all of them per request (`requirements` scans; unlike parameters, security
-has no index). §11.9 measures it on the example (6 operations); in an API of thousands of operations it would be the next thing to index.
+`guard` reads the declaration's security records. *Corrected: it first scanned all of them per request (`requirements` scanned; unlike parameters,
+security had no index) and this section said that in an API of thousands of operations "it would be the next thing to index". It was: §11.13
+measured it, and the security records are now chained per operation, the way parameters are.*
 
 ### 11.7 What this deliberately is not
 
@@ -705,3 +706,27 @@ ignored, alternatives ignored, the search starting at `after`. The refusal to st
   the parameter `must`). With those two dealt with, the final run of 27 mutations has every one caught. The mutation lists of §9.10 (twenty on
   `dispatch`) were run by older scripts that read the result lines (`FAILED` and `test result`), not the word `error`, and are not in question.
 * **Not done:** a way to read a text default without `present` (§12.4).
+
+### 11.13 The size of the API mattered to `guard`, and now does not
+
+`benches/guard_scale.sh` runs `examples/guarded` with 0, 200 and 2,000 more operations (each needing `admin`; `guarded <port> <admin> <ingest> <n>`),
+alternating the sizes over five rounds of four seconds, server on core 0. A gated read (`GET /report` with the admin token), requests a second, median:
+
+| more operations | before (security records scanned) | after (chained) | an open read, after |
+|---:|---:|---:|---:|
+| 0 | 61,900 | 65,400 | 66,900 |
+| 200 | 45,100 | 62,300 | 67,700 |
+| 2,000 | 15,900 | 64,400 | 69,600 |
+
+The scan made a gated read 27% slower with 200 more operations and 74% slower with 2,000; the open read was not affected because its `no_auth` record
+comes early. §11.6 had guessed this ("would show") and §11.9 had measured only the six-operation API, where it did not.
+
+* **What changed.** An operation's record keeps, in its last field, where its first security record is; the security records of one operation
+  are a chain through their field 7; the document's default security is a chain whose head is the second int of a first, placeholder pair in
+  `Api.index` (operations are at `2 * op` now, not `2 * (op - 1)`). `is_open`, `requirements`, `requirement` and the document writer walk the
+  chains. Declaring is still O(1) a call for the first record of an operation and O(its alternatives) after.
+* **Shown.** The 22 unit tests, unchanged, pass; the served documents of `users` and `users_pg` are byte-identical; the four end-to-end suites
+  pass; eleven mutations of the chain code (the head never set, the tail never linked, the default head not stored, the default count doubled,
+  the wrong field read, `no_auth` ignored, the default order shifted, the document without alternatives or without the default, the operation
+  index off by one) are each caught by a test or by the test run hanging, which the script counts as caught (a broken chain is a loop that does not end).
+* **Not done:** the other record kinds are still scanned (`respond`, `body`, notes); `guard` and `dispatch` do not read them.
