@@ -133,14 +133,19 @@ jobs:
           $CANCHO fmt --check examples src tests
 
       # What the users service can touch, as `cancho authority` reports it, is pinned in docs/authority.json: a new capability or foreign
-      # call is a red diff that only committing the new file makes green (scripts/check-authority.sh). Needs build/deps from the builds above.
+      # call is a red diff that only committing the new file makes green (scripts/check-authority.sh, which builds each example first). Pinned for users, guarded, users_pg and users_threads.
       - name: The authority report is the committed one
         working-directory: web
         env:
           CANCHO: ${{ github.workspace }}/cancho/target/release/cancho
+          CANCHO_DIR: ${{ github.workspace }}/cancho
+          SCHEMA_DIR: ${{ github.workspace }}/cancho-schema
+          PG_DIR: ${{ github.workspace }}/cancho-pg
         run: |
           scripts/check-authority.sh
           EXAMPLE=guarded scripts/check-authority.sh
+          EXAMPLE=users_pg scripts/check-authority.sh
+          EXAMPLE=users_threads scripts/check-authority.sh
 
       # `web.guard` and `web.log_line` on a real socket: examples/guarded (docs/design.md section 11).
       - name: The guarded example
