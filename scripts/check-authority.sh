@@ -11,7 +11,8 @@
 #   EXAMPLE  which service (default: users, pinned in docs/authority.json; any other, e.g. `guarded`, `users_pg`, `users_threads`, in
 #            docs/authority-<name>.json). All of examples/<name>/*.cho is analysed with it.
 #
-# The program is examples/users/users.cho, src/web.cho and the packages that `scripts/build.sh` fetched into build/deps (run a build first).
+# The program is examples/<name>/*.cho, src/web.cho and the packages that `scripts/build.sh` fetches into build/deps (the script builds first, so it
+# needs what build.sh needs: CANCHO_DIR, SCHEMA_DIR and, for users_pg, PG_DIR).
 # What is left out of the pinned file: the list of provably pure functions and the three counts (`folded_operators`, `folded_calls`,
 # `functions`). They change with every function anyone adds, say nothing about authority, and would make every change red. Everything else the report
 # has is pinned, including any field a later compiler adds.
@@ -28,9 +29,10 @@ case "${1:-}" in
   *) echo "usage: $0 [--update]" >&2; exit 2 ;;
 esac
 cd "$here"
-ls build/deps/*.cho >/dev/null 2>&1 || { echo "check-authority: no build/deps; run scripts/build.sh first" >&2; exit 2; }
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
+# Building fetches the packages this example (and only this one) imports into build/deps, which is what is analysed with it.
+scripts/build.sh "examples/$EXAMPLE/$EXAMPLE.cho" "$work/bin" >/dev/null
 "$CANCHO" authority examples/$EXAMPLE/*.cho src/web.cho build/deps/*.cho --std --output json > "$work/raw.json"
 python3 - "$work/raw.json" > "$work/report.json" <<'PY'
 import json, sys
