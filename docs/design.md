@@ -658,7 +658,7 @@ header that a client is expected to send. A header parameter can have one (it is
 
 `scripts/check-authority.sh` took only `users`; `EXAMPLE=<name>` now pins any of them (all of `examples/<name>/*.cho` is analysed), and CI
 checks `users`, `guarded`, `users_pg` and `users_threads`. What the reports say, as pinned: none reaches a foreign
-symbol. (Corrected when the compiler pin moved to `c4bcce0`: the earlier text said all four were bounded. That compiler reports `net_in("")` as unbounded, which it is: the port is read from the command line, so the capability cannot name it. `users`, `guarded` and `users_pg` are pinned as that; `users_threads` and the pooled `users_pg` are not yet re-pinned, see the pull request.) `users_pg` is the only one with `net_out` (the database) and `fs_read("/dev/urandom")` (the nonce of its login); `users_threads` is the only
+symbol. (Corrected when the compiler pin moved to `c4bcce0`: the earlier text said all four were bounded. That compiler reports `net_in("")` as unbounded, which it is: the port is read from the command line, so the capability cannot name it. `users`, `guarded` and `users_pg` are pinned as that; `users_pg` also reports `net_out("")` unbounded, the database host being an argument. `users_threads` is not yet re-pinned, see the pull request.) `users_pg` is the only one with `net_out` (the database) and `fs_read("/dev/urandom")` (the nonce of its login); `users_threads` is the only
 one with `conc` (its threads). That the one with a database can read exactly one file, and which, is the kind of fact the pin is for.
 
 ### 11.11 What the gate of a real service showed (`cancho-hooks`, `src/authz.cho`)

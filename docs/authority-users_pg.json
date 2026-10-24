@@ -1,6 +1,9 @@
 {
-  "bounded": true,
-  "unbounded_by": [],
+  "bounded": false,
+  "unbounded_by": [
+    "net_in(\"\")",
+    "net_out(\"\")"
+  ],
   "effects": [
     "args",
     "clock",
@@ -58,18 +61,23 @@
     {
       "name": "net_in",
       "argument": "",
-      "bounded": true
+      "bounded": false
     },
     {
       "name": "net_out",
       "argument": "",
-      "bounded": true
+      "bounded": false
     },
     {
       "name": "poll",
       "argument": null,
       "bounded": true
     }
+  ],
+  "never_touches": [
+    "signals",
+    "other programs",
+    "foreign code"
   ],
   "foreign_symbols": []
 }
