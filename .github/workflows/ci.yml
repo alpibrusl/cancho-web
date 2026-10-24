@@ -9,7 +9,7 @@ env:
   # The two sibling checkouts the build reads packages from, and the compiler
   # that builds them. The locks in deps/ pin source hashes; these pin the
   # repositories (and the compiler, whose bundled `std` no lock records).
-  CANCHO_REV: a4572ea3b506e4bcec1c4be43deda1043c11ba9f
+  CANCHO_REV: 53bee2852bacfb1692141cc2338bfc76fa79dd55
   SCHEMA_REV: 59a70285ff23af63a226bc56ff978feccb4cf8ca
   PG_REV: f1b972fb519f16a9982146691e4a28ef3bc9d79d
 
