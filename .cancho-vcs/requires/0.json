@@ -3,7 +3,7 @@
   "lock": {
     "origin": {
       "git": "https://github.com/alpibrusl/cancho-schema",
-      "rev": "59a70285ff23af63a226bc56ff978feccb4cf8ca",
+      "rev": "ab15474b0974f96fc71595520774bd2f17a7e3b9",
       "path": ".cancho-vcs"
     },
     "entries": {
