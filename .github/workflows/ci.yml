@@ -9,7 +9,7 @@ env:
   # The two sibling checkouts the build reads packages from, and the compiler
   # that builds them. The locks in deps/ pin source hashes; these pin the
   # repositories (and the compiler, whose bundled `std` no lock records).
-  CANCHO_REV: f4ead824f33b291a0ad7620a34a0c1346a7abe4f
+  CANCHO_REV: 471b8e9334e021123286db4b1cb9feaeba2677c5
   SCHEMA_REV: ab15474b0974f96fc71595520774bd2f17a7e3b9
   PG_REV: a31de2a94eedc7bb1a3608914eec27d35f6aa6d2
 
@@ -49,7 +49,7 @@ jobs:
       - name: Build cancho
         if: steps.compiler.outputs.cache-hit != 'true'
         working-directory: cancho
-        run: cargo build --release -p cancho
+        run: scripts/install.sh "$(git rev-parse HEAD)" "$RUNNER_TEMP/cancho-release" && mkdir -p target/release && cp "$RUNNER_TEMP/cancho-release/bin/cancho" target/release/cancho
 
       - name: Test tooling
         run: |
