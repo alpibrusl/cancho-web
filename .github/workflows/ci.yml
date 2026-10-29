@@ -118,7 +118,7 @@ jobs:
           PGUSER: postgres
         run: |
           psql -d users_pg -q -v ON_ERROR_STOP=1 -f examples/users_pg/schema.sql
-          $CANCHO build --std ../cancho-pg/tools/pgen.cho ../cancho-pg/src/pg.cho -o /tmp/pgen
+          $CANCHO build --std "$(cd .. && pwd)/cancho-pg/tools/pgen.cho" "$(cd .. && pwd)/cancho-pg/src/pg.cho" -o /tmp/pgen
           /tmp/pgen 127.0.0.1 5432 postgres users_pg - examples/users_pg/queries.sql > /tmp/queries.cho
           diff /tmp/queries.cho examples/users_pg/queries.cho
 
